@@ -1,0 +1,150 @@
+"use client";
+
+// PadelHub — club-core client store (dummy, in-memory + localStorage).
+// Holds mutable courts + bookings so create/cancel actions reflect across
+// the dashboard, bookings calendar, and courts pages within a session.
+//
+// NOTE: owned by the club-core agent. Other agents must not import/redefine.
+
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import {
+  mockCourts,
+  type Court,
+} from "@/data/padel/club/courts";
+import {
+  mockBookings,
+  type Booking,
+} from "@/data/padel/club/bookings";
+
+const LS_COURTS = "padelhub.club.courts.v1";
+const LS_BOOKINGS = "padelhub.club.bookings.v1";
+
+interface ClubDataValue {
+  courts: Court[];
+  bookings: Booking[];
+  isReady: boolean;
+  // courts
+  addCourt: (court: Omit<Court, "id">) => Court;
+  updateCourt: (id: string, patch: Partial<Court>) => void;
+  deleteCourt: (id: string) => void;
+  // bookings
+  addBooking: (booking: Omit<Booking, "id">) => Booking;
+  cancelBooking: (id: string) => void;
+  updateBooking: (id: string, patch: Partial<Booking>) => void;
+  reset: () => void;
+}
+
+const ClubDataContext = createContext<ClubDataValue | null>(null);
+
+export const ClubDataProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [courts, setCourts] = useState<Court[]>(mockCourts);
+  const [bookings, setBookings] = useState<Booking[]>(mockBookings);
+  const [isReady, setIsReady] = useState(false);
+
+  // hydrate from localStorage once
+  useEffect(() => {
+    try {
+      const c = localStorage.getItem(LS_COURTS);
+      if (c) setCourts(JSON.parse(c));
+      const b = localStorage.getItem(LS_BOOKINGS);
+      if (b) setBookings(JSON.parse(b));
+    } catch {
+      /* ignore */
+    }
+    setIsReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isReady) return;
+    try {
+      localStorage.setItem(LS_COURTS, JSON.stringify(courts));
+    } catch {
+      /* ignore */
+    }
+  }, [courts, isReady]);
+
+  useEffect(() => {
+    if (!isReady) return;
+    try {
+      localStorage.setItem(LS_BOOKINGS, JSON.stringify(bookings));
+    } catch {
+      /* ignore */
+    }
+  }, [bookings, isReady]);
+
+  const addCourt = useCallback((court: Omit<Court, "id">) => {
+    const created: Court = { ...court, id: `court-${Date.now().toString(36)}` };
+    setCourts((prev) => [...prev, created]);
+    return created;
+  }, []);
+
+  const updateCourt = useCallback((id: string, patch: Partial<Court>) => {
+    setCourts((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }, []);
+
+  const deleteCourt = useCallback((id: string) => {
+    setCourts((prev) => prev.filter((c) => c.id !== id));
+  }, []);
+
+  const addBooking = useCallback((booking: Omit<Booking, "id">) => {
+    const created: Booking = { ...booking, id: `bk-${Date.now().toString(36)}` };
+    setBookings((prev) => [...prev, created]);
+    return created;
+  }, []);
+
+  const cancelBooking = useCallback((id: string) => {
+    setBookings((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, status: "cancelled" } : b)),
+    );
+  }, []);
+
+  const updateBooking = useCallback((id: string, patch: Partial<Booking>) => {
+    setBookings((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  }, []);
+
+  const reset = useCallback(() => {
+    setCourts(mockCourts);
+    setBookings(mockBookings);
+    try {
+      localStorage.removeItem(LS_COURTS);
+      localStorage.removeItem(LS_BOOKINGS);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const value = useMemo<ClubDataValue>(
+    () => ({
+      courts,
+      bookings,
+      isReady,
+      addCourt,
+      updateCourt,
+      deleteCourt,
+      addBooking,
+      cancelBooking,
+      updateBooking,
+      reset,
+    }),
+    [courts, bookings, isReady, addCourt, updateCourt, deleteCourt, addBooking, cancelBooking, updateBooking, reset],
+  );
+
+  return <ClubDataContext.Provider value={value}>{children}</ClubDataContext.Provider>;
+};
+
+export function useClubData(): ClubDataValue {
+  const ctx = useContext(ClubDataContext);
+  if (!ctx) {
+    throw new Error("useClubData must be used within a ClubDataProvider");
+  }
+  return ctx;
+}
