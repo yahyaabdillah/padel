@@ -1,8 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { Check, Eye, Pencil, Save, Send, Trash2 } from "lucide-react";
 import Badge from "@/components/ui/badge/Badge";
 import Button from "@/components/ui/button/Button";
+import ExportActionsButton, { type ExportAction } from "@/components/ui/button/ExportActionsButton";
 import Tabs from "@/components/ui/tabs/Tabs";
 import Alert from "@/components/ui/alert/Alert";
 import { Modal, ModalDialog } from "@/components/ui/modal";
@@ -13,10 +15,12 @@ import PageBreadCrumb from "@/components/common/PageBreadCrumb";
 import { useModal } from "@/hooks/useModal";
 // New foundation components
 import TextInput from "@/components/ui/input/TextInput";
+import CurrencyInput from "@/components/ui/input/CurrencyInput";
 import Textarea from "@/components/ui/input/Textarea";
 import PhoneInput, { type Country } from "@/components/ui/input/PhoneInput";
 import UiSelect from "@/components/ui/select/Select";
 import DatePicker from "@/components/ui/datepicker/DatePicker";
+import SegmentedDateInput from "@/components/ui/datepicker/SegmentedDateInput";
 import Accordion from "@/components/ui/accordion/Accordion";
 import Carousel from "@/components/ui/carousel/Carousel";
 import Card from "@/components/ui/card/Card";
@@ -96,6 +100,7 @@ function TokenRow({ label, lightHex, darkHex, desc }: { label: string; lightHex:
 }
 
 const sections = [
+  { id: "fixed-ui-kit", label: "Fixed UI Kit" },
   { id: "design-tokens", label: "Design Tokens" },
   { id: "palette", label: "Color Palette" },
   { id: "status", label: "Status Colors" },
@@ -142,6 +147,7 @@ export default function UIKitPage() {
   const { isOpen, openModal, closeModal } = useModal();
   const scrollModal = useModal();
   const dialogModal = useModal();
+  const fixedConfirmModal = useModal();
   const [activeTab, setActiveTab] = useState("data");
   const [activeTab2, setActiveTab2] = useState("all");
   const [activePill, setActivePill] = useState("bulanan");
@@ -151,11 +157,73 @@ export default function UIKitPage() {
   const [page, setPage] = useState(1);
   const [ratingVal, setRatingVal] = useState(3.5);
   const [sliderVal, setSliderVal] = useState(40);
+  const [birthDate, setBirthDate] = useState<Date | null>(null);
+  const [clickedFeedback, setClickedFeedback] = useState<Record<string, boolean>>({});
+  const feedbackTimers = useRef<Record<string, number>>({});
   const drawerRight = useModal();
   const drawerBottom = useModal();
   const addModal = useModal();
   const toast = useToast();
   const countries = countriesData as Country[];
+  const fullExportActions: ExportAction[] = [
+    {
+      id: "excel",
+      label: "Excel",
+      description: "Data tabel dalam format .xlsx",
+      filename: "laporan-member.xlsx",
+      kind: "excel",
+    },
+    {
+      id: "pdf",
+      label: "PDF",
+      description: "Dokumen siap cetak",
+      filename: "laporan-member.pdf",
+      kind: "pdf",
+    },
+    {
+      id: "image",
+      label: "Gambar",
+      description: "Snapshot visual dalam format .png",
+      filename: "grafik-member.png",
+      kind: "image",
+    },
+  ];
+  const compactExportActions: ExportAction[] = [
+    {
+      id: "excel",
+      label: "Export Excel",
+      filename: "laporan-booking.xlsx",
+      kind: "excel",
+    },
+    {
+      id: "pdf",
+      label: "Export PDF",
+      filename: "laporan-booking.pdf",
+      kind: "pdf",
+    },
+  ];
+
+  useEffect(() => {
+    const timers = feedbackTimers.current;
+
+    return () => {
+      Object.values(timers).forEach(window.clearTimeout);
+    };
+  }, []);
+
+  const showClickedFeedback = (id: string) => {
+    window.clearTimeout(feedbackTimers.current[id]);
+    setClickedFeedback((current) => ({ ...current, [id]: true }));
+
+    feedbackTimers.current[id] = window.setTimeout(() => {
+      setClickedFeedback((current) => ({ ...current, [id]: false }));
+      delete feedbackTimers.current[id];
+    }, 1800);
+  };
+
+  const handleExportAction = (action: ExportAction) => {
+    toast.success(`${action.filename ?? action.label} sedang disiapkan.`, "Export diproses");
+  };
 
   const notifications: NotificationItem[] = [
     { id: "1", title: "Booking baru", message: "Andi Wijaya memesan Center Court 19:00", time: "5 menit lalu", type: "success" },
@@ -206,15 +274,30 @@ export default function UIKitPage() {
   ];
 
   return (
-    <div className="flex min-h-[calc(100dvh-80px)]">
-      <aside className="hidden lg:flex w-48 shrink-0 flex-col gap-0.5 sticky top-20 h-[calc(100dvh-80px)] overflow-y-auto py-4 pr-4 border-r border-gray-200 dark:border-gray-700">
+    <div className="flex min-h-[calc(100dvh-80px)] min-w-0 flex-col xl:flex-row">
+      <aside className="hidden xl:flex w-56 shrink-0 flex-col gap-0.5 sticky top-20 h-[calc(100dvh-80px)] overflow-y-auto py-4 pr-4 border-r border-gray-200 dark:border-gray-700">
         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3 px-2">Sections</p>
         {sections.map((s) => (
-          <a key={s.id} href={`#${s.id}`} className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/5 truncate">{s.label}</a>
+          <a key={s.id} href={`#${s.id}`} className="whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/5">{s.label}</a>
         ))}
       </aside>
 
-      <div className="flex-1 px-4 md:px-6 py-6 space-y-14 max-w-5xl">
+      <div className="min-w-0 flex-1 px-4 md:px-6 py-6 space-y-14 xl:max-w-5xl">
+        <nav className="sticky top-16 z-20 -mx-4 -mt-6 border-b border-gray-200 bg-[var(--surface-bg)]/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6 xl:hidden dark:border-gray-800">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-gray-400">Sections</p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {sections.map((s) => (
+              <a
+                key={s.id}
+                href={`#${s.id}`}
+                className="shrink-0 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400"
+              >
+                {s.label}
+              </a>
+            ))}
+          </div>
+        </nav>
+
         <PageBreadCrumb pageTitle="UI Kit" />
 
         <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-6">
@@ -229,6 +312,393 @@ export default function UIKitPage() {
         </div>
 
         {/* ═══ DESIGN TOKENS ═══ */}
+        <Section id="fixed-ui-kit" title="Fixed UI Kit">
+          <Accordion
+            type="single"
+            defaultOpen={["ui-kit-final"]}
+            items={[
+              {
+                value: "ui-kit-final",
+                title: "UI Kit yang Digunakan",
+                content: (
+                  <div className="space-y-6">
+                    <ComponentCard title="Form" desc="Kurang dari 5 input memakai modal; lebih dari 5 input memakai halaman/stepper.">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <TextInput
+                          label="Kode Member"
+                          labelInfo="Kode unik untuk identifikasi member pada check-in, booking, dan invoice."
+                          placeholder="MBR-001"
+                          required
+                        />
+                        <TextInput
+                          label="Email Invoice"
+                          labelInfo="Invoice dan bukti pembayaran akan dikirim ke alamat email ini."
+                          type="email"
+                          placeholder="billing@padelhub.io"
+                        />
+                        <UiSelect label="Tipe Membership" options={selectOptions} searchable placeholder="Pilih membership..." />
+                        <DatePicker mode="single" label="Tanggal Mulai" placeholder="Pilih tanggal" />
+                      </div>
+                      <div className="rounded-xl border border-dashed border-[var(--border-strong)] p-4">
+                        <p className="text-sm font-medium text-[var(--text-heading)]">Input halaman penuh</p>
+                        <div className="mt-3 grid gap-2 text-xs text-[var(--text-body)] sm:grid-cols-2 lg:grid-cols-3">
+                          {["Profil member", "Kontak darurat", "Paket membership", "Preferensi court", "Metode pembayaran", "Dokumen pendukung"].map((item) => (
+                            <span key={item} className="rounded-lg bg-[var(--surface-muted)] px-3 py-2">{item}</span>
+                          ))}
+                        </div>
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Tipe Input" desc="Text, email (validasi), password (toggle), number, search">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <TextInput label="Text" placeholder="Nama member..." />
+                        <TextInput label="Email (validasi otomatis)" type="email" placeholder="email@padelhub.io" validate required errorText="Format email tidak valid" successText="Email valid" />
+                        <TextInput label="Password" type="password" placeholder="••••••••" />
+                        <TextInput label="Number" type="number" placeholder="0" />
+                        <TextInput label="Search" type="search" placeholder="Cari..." startIcon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>} />
+                        <TextInput label="Dengan hint" placeholder="Username" hint="Minimal 4 karakter" />
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Input Components">
+                      <div className="space-y-4">
+                        <CurrencyInput label="Currency Input IDR" labelInfo="Format angka otomatis menjadi 1.000.000." defaultValue={1000000} success successText="Format IDR valid" />
+                        <div className="space-y-3">
+                          <Checkbox label="Aktifkan notifikasi email" defaultChecked />
+                          <Checkbox label="Kirim reminder WhatsApp" description="Member akan menerima pesan otomatis" />
+                          <Checkbox label="Disabled" disabled />
+                        </div>
+                        <RadioGroup
+                          defaultValue="premium"
+                          options={[
+                            { value: "regular", label: "Casual", description: "Bayar per main" },
+                            { value: "premium", label: "Pro", description: "Diskon + open play" },
+                            { value: "vip", label: "Elite", description: "Unlimited + PT" },
+                          ]}
+                        />
+                        <UiSelect label="Tipe Membership" options={selectOptions} value={singleSelect} onChange={setSingleSelect} searchable placeholder="Pilih membership..." />
+                        <UiSelect label="Tag Member" options={[{ value: "vip", label: "VIP" }, { value: "loyal", label: "Loyal" }, { value: "new", label: "New" }]} value={tags} onChange={setTags} multiple searchable addable placeholder="Pilih atau ketik tag baru..." />
+                        <div className="flex flex-wrap items-center gap-6">
+                          <Switch variant="default" label="Default" defaultChecked />
+                          <Switch variant="icon" label="Icon (check/x)" defaultChecked />
+                          <Switch variant="theme" label="Theme (matahari/bulan)" defaultChecked />
+                          <Switch variant="labeled" label="Labeled" defaultChecked />
+                        </div>
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Date Pickers" desc="Single, range, month, time, dan format dd/mm/yyyy">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <DatePicker mode="single" label="Tanggal" placeholder="Pilih tanggal" />
+                        <DatePicker mode="range" label="Rentang Tanggal" placeholder="Pilih rentang" />
+                        <SegmentedDateInput
+                          label="Tanggal Lahir"
+                          labelInfo="Gunakan format tanggal Indonesia: hari, bulan, lalu tahun."
+                          hint={`Value: ${birthDate ? birthDate.toLocaleDateString("id-ID") : "Belum dipilih"}`}
+                          onChange={(date) => setBirthDate(date)}
+                        />
+                        <DatePicker mode="month" label="Bulan" placeholder="Pilih bulan" />
+                        <TimePicker label="Jam Buka (24 jam)" placeholder="Pilih waktu" />
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Dropzone" desc="Icon di tengah bisa dikustomisasi + validasi file (tipe, ukuran, jumlah)">
+                      <div className="space-y-4">
+                        <Dropzone
+                          title="Tarik foto member ke sini"
+                          description="atau klik untuk pilih (PNG/JPG, maks 2MB)"
+                          validation={{ accept: ["image/png", "image/jpeg"], maxSizeMB: 2, maxFiles: 4 }}
+                          onReject={(file, reason) => toast.error(`${file.name}: ${reason}`)}
+                          onFilesChange={(files) => { if (files.length) toast.success(`${files.length} file dipilih`); }}
+                        />
+                        <Dropzone
+                          multiple={false}
+                          icon={<svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>}
+                          title="Upload dokumen"
+                          description="PDF / DOCX, maks 5MB"
+                          validation={{ accept: [".pdf", ".docx"], maxSizeMB: 5 }}
+                          showPreview
+                        />
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Validation Input">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <TextInput label="Success" defaultValue="Andi Wijaya" success successText="Data valid" />
+                        <TextInput label="Error" defaultValue="xx" error errorText="Tidak valid" />
+                        <TextInput label="Dengan hint" placeholder="Username" hint="Minimal 4 karakter" />
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Data Table" desc="Search berada di atas tabel, nomor otomatis muncul di kolom paling kiri.">
+                      <DataTable
+                        rowKey={(row) => row.id}
+                        searchable
+                        searchPlaceholder="Cari member, paket, atau status..."
+                        showRowNumber
+                        paginated
+                        defaultPageSize={10}
+                        pageSizeOptions={[10, 25, 50]}
+                        striped
+                        getSearchText={(row) => `${row.name} ${row.package} ${row.status} ${row.court} ${row.createdAt} ${row.createdBy}`}
+                        data={[
+                          { id: "m-001", name: "Raka Pradana", package: "Elite", status: "Aktif", court: "Center Court", createdAt: "9 Juni 2026", createdBy: "Fadhil" },
+                          { id: "m-002", name: "Nadia Okta", package: "Pro", status: "Aktif", court: "Sky Court", createdAt: "9 Juni 2026", createdBy: "Fadhil" },
+                          { id: "m-003", name: "Bagus Saputra", package: "Casual", status: "Trial", court: "Rally Court", createdAt: "8 Juni 2026", createdBy: "Nadia" },
+                          { id: "m-004", name: "Maya Sari", package: "Pro", status: "Frozen", court: "Smash Court", createdAt: "8 Juni 2026", createdBy: "Raka" },
+                        ]}
+                        columns={[
+                          { key: "name", header: "Nama Member", sortable: true, accessor: (row) => <span className="font-medium text-[var(--text-heading)]">{row.name}</span>, sortValue: (row) => row.name } as Column<{ id: string; name: string; package: string; status: string; court: string; createdAt: string; createdBy: string }>,
+                          { key: "package", header: "Paket", sortable: true, accessor: (row) => row.package, sortValue: (row) => row.package },
+                          { key: "status", header: "Status", accessor: (row) => <Badge variant="light" color={row.status === "Aktif" ? "success" : row.status === "Frozen" ? "warning" : "info"}>{row.status}</Badge> },
+                          { key: "court", header: "Lapangan Favorit", sortable: true, accessor: (row) => row.court, sortValue: (row) => row.court },
+                          { key: "log", header: "Log", accessor: (row) => <span className="text-xs text-[var(--text-caption)]">{row.createdAt} {row.createdBy}</span> },
+                          {
+                            key: "actions",
+                            header: "Aksi",
+                            accessor: () => (
+                              <div className="flex items-center gap-1.5">
+                                <Button variant="ghost" size="sm" startIcon={<Eye className="h-4 w-4" />}>Detail</Button>
+                                <Button variant="ghost" size="sm" startIcon={<Pencil className="h-4 w-4" />}>Edit</Button>
+                                <Button variant="ghost" size="sm" startIcon={<Trash2 className="h-4 w-4" />}>Hapus</Button>
+                              </div>
+                            ),
+                          },
+                        ]}
+                      />
+                    </ComponentCard>
+
+                    <ComponentCard title="Mobile Table Accordion">
+                      <Accordion
+                        defaultOpen={["m-001"]}
+                        items={[
+                          {
+                            value: "m-001",
+                            title: "Raka Pradana - Aktif",
+                            content: (
+                              <div className="space-y-3 text-sm">
+                                <div className="flex justify-between"><span>Paket</span><strong>Elite</strong></div>
+                                <div className="flex justify-between"><span>Log</span><span>9 Juni 2026 Fadhil</span></div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button variant="outline" size="sm" startIcon={<Eye className="h-4 w-4" />}>Detail</Button>
+                                  <Button variant="outline" size="sm" startIcon={<Pencil className="h-4 w-4" />}>Edit</Button>
+                                  <Button variant="ghost" size="sm" startIcon={<Trash2 className="h-4 w-4" />}>Hapus</Button>
+                                </div>
+                              </div>
+                            ),
+                          },
+                          {
+                            value: "m-002",
+                            title: "Nadia Okta - Trial",
+                            content: <p>Detail hanya muncul setelah accordion dibuka.</p>,
+                          },
+                        ]}
+                      />
+                    </ComponentCard>
+
+                    <ComponentCard title="Light Variant">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="light" color="primary">Primary</Badge>
+                        <Badge variant="light" color="secondary">Secondary</Badge>
+                        <Badge variant="light" color="success">Success</Badge>
+                        <Badge variant="light" color="error">Error</Badge>
+                        <Badge variant="light" color="warning">Warning</Badge>
+                        <Badge variant="light" color="info">Info</Badge>
+                        <Badge variant="light" color="emerald">Emerald</Badge>
+                        <Badge variant="light" color="neutral">Neutral</Badge>
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Trigger Toast" desc="Notifikasi sementara, muncul dari kanan atas, auto-dismiss">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Button variant="primary" size="sm" onClick={() => toast.success("Member berhasil ditambahkan!", "Berhasil")}>Success</Button>
+                        <Button variant="outline" size="sm" onClick={() => toast.error("Gagal menyimpan data.", "Error")}>Error</Button>
+                        <Button variant="outline" size="sm" onClick={() => toast.warning("Membership hampir habis.", "Perhatian")}>Warning</Button>
+                        <Button variant="outline" size="sm" onClick={() => toast.info("Ada update sistem baru.")}>Info</Button>
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Skeleton">
+                      <div className="flex items-center gap-4">
+                        <Skeleton variant="circle" width={48} height={48} />
+                        <div className="flex-1 space-y-2">
+                          <Skeleton variant="text" width="60%" />
+                          <Skeleton variant="text" width="90%" />
+                        </div>
+                      </div>
+                      <Skeleton className="mt-4 h-24 w-full" />
+                    </ComponentCard>
+
+                    <ComponentCard title="Empty State">
+                      <EmptyState
+                        title="Belum ada member"
+                        description="Tambahkan member pertama untuk mulai mengelola data."
+                        action={<Button variant="primary" size="sm">+ Tambah Member</Button>}
+                      />
+                    </ComponentCard>
+
+                    <ComponentCard title="Confirm Dialog">
+                      <Button className="mt-4" size="sm" variant="outline" onClick={fixedConfirmModal.openModal}>Confirm Dialog</Button>
+                    </ComponentCard>
+
+                    <ComponentCard title="Border Radius">
+                      <div className="flex flex-wrap items-center gap-6">
+                        {[{ l: "lg", c: "rounded-lg" }, { l: "xl", c: "rounded-xl" }, { l: "2xl", c: "rounded-2xl" }, { l: "3xl", c: "rounded-3xl" }, { l: "full", c: "rounded-full" }].map((radius) => (
+                          <div key={radius.l} className="flex flex-col items-center gap-2">
+                            <div className={`w-14 h-14 bg-blue-100 border-2 border-blue-300 dark:bg-blue-500/20 dark:border-blue-500/40 ${radius.c}`} />
+                            <span className="text-[10px] text-gray-500 dark:text-gray-400 font-mono">{radius.l}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Shadows">
+                      <div className="flex flex-wrap gap-6">
+                        {["theme-xs", "theme-sm", "theme-md", "theme-lg", "theme-xl"].map((shadow) => (
+                          <div key={shadow} className="flex flex-col items-center gap-2">
+                            <div className={`w-16 h-16 rounded-xl bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 shadow-${shadow}`} />
+                            <span className="text-[10px] text-gray-500 dark:text-gray-400 font-mono">{shadow}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Variants" desc="4 variant: primary, outline, dashed, chip">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Button variant="primary">Primary</Button>
+                        <Button variant="soft">Soft</Button>
+                        <Button variant="outline">Outline</Button>
+                        <Button variant="ghost">Ghost</Button>
+                        <Button variant="dashed">Dashed</Button>
+                        <Button variant="chip" active>Chip Active</Button>
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Feedback Setelah Klik" desc="State sukses sementara agar user tahu aksi tombol sudah diterima.">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Button
+                          variant="primary"
+                          sheen
+                          onClick={() => showClickedFeedback("save")}
+                          startIcon={clickedFeedback.save ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                          className={clickedFeedback.save ? "!bg-[var(--color-emerald)] hover:!bg-[var(--color-emerald-hover)]" : ""}
+                        >
+                          {clickedFeedback.save ? "Tersimpan" : "Simpan"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => showClickedFeedback("send")}
+                          startIcon={clickedFeedback.send ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                          className={clickedFeedback.send ? "!bg-[var(--color-emerald-light)] !text-[var(--color-emerald)] !ring-[var(--color-emerald)]" : ""}
+                        >
+                          {clickedFeedback.send ? "Terkirim" : "Kirim Reminder"}
+                        </Button>
+                        <Button
+                          variant="soft"
+                          onClick={() => showClickedFeedback("confirm")}
+                          startIcon={<Check className="h-4 w-4" />}
+                          className={clickedFeedback.confirm ? "!bg-[var(--color-emerald)] !text-white hover:!bg-[var(--color-emerald-hover)]" : ""}
+                        >
+                          {clickedFeedback.confirm ? "Dikonfirmasi" : "Konfirmasi Booking"}
+                        </Button>
+                      </div>
+                    </ComponentCard>
+
+                                        <ComponentCard title="Export Actions" desc="3 format tampil sebagai dropdown export, 2 format tampil sebagai tombol langsung.">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">3 Format</p>
+                          <ExportActionsButton
+                            label="Export"
+                            variant="primary"
+                            actions={fullExportActions}
+                            onExport={handleExportAction}
+                          />
+                        </div>
+                        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">2 Format</p>
+                          <ExportActionsButton
+                            variant="outline"
+                            actions={compactExportActions}
+                            onExport={handleExportAction}
+                          />
+                        </div>
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Sidebar Navigation" desc="Parent → child → grandchild. Active pakai highlight background (tanpa garis kiri).">
+                      <div className="h-[460px] overflow-hidden rounded-xl border border-[var(--border-default)]">
+                        <Sidebar
+                          activePath="/ui-kit-demo/membership"
+                          logo={<span className="text-lg font-bold text-[var(--text-heading)]">Padel<span className="text-[var(--color-primary)]">Hub</span></span>}
+                          groups={sidebarGroups}
+                          footer={<div className="flex items-center gap-2"><Avatar name="Raka Pradana" size="sm" /><div className="min-w-0"><p className="truncate text-sm font-medium text-[var(--text-heading)]">Raka Pradana</p><p className="truncate text-xs text-[var(--text-caption)]">Owner</p></div></div>}
+                        />
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Bar Chart" desc="Resizable — width 100%, height bisa diatur">
+                      <BarChart
+                        categories={["Jan", "Feb", "Mar", "Apr", "Mei", "Jun"]}
+                        series={[
+                          { name: "Member Baru", data: [45, 52, 38, 65, 48, 72] },
+                          { name: "Check-out", data: [12, 8, 15, 6, 10, 5] },
+                        ]}
+                        height={300}
+                      />
+                    </ComponentCard>
+
+                    <ComponentCard title="Clean Bar Chart" desc="Bar lebih tegas, label angka terlihat, dan mudah dibaca untuk insight cepat.">
+                      <div className="space-y-6">
+                        <BarChart
+                          variant="clean"
+                          showDataLabels
+                          valueSuffix=" booking"
+                          height={280}
+                          columnWidth="38%"
+                          colors={["#2563eb", "#06b6d4", "#10b981", "#f59e0b"]}
+                          categories={["Center", "Sky", "Rally", "Smash"]}
+                          series={[
+                            { name: "Booking", data: [128, 96, 72, 44] },
+                          ]}
+                        />
+                      </div>
+                    </ComponentCard>
+
+                    <ComponentCard title="Line / Area Chart">
+                      <LineChart
+                        area
+                        categories={["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"]}
+                        series={[{ name: "Check-In", data: [120, 145, 132, 167, 189, 210, 95] }]}
+                        height={300}
+                      />
+                    </ComponentCard>
+
+                    <ComponentCard title="Radar / Spider Chart" desc="Profil performa">
+                      <RadarChart
+                        categories={["Kekuatan", "Cardio", "Fleksibilitas", "Endurance", "Balance"]}
+                        series={[
+                          { name: "Andi", data: [80, 65, 70, 85, 60] },
+                          { name: "Target", data: [90, 80, 75, 90, 80] },
+                        ]}
+                        height={300}
+                      />
+                    </ComponentCard>
+
+                    <ComponentCard title="Donut Chart" desc="Distribusi membership">
+                      <DonutChart
+                        labels={["Regular", "Premium", "VIP", "Student"]}
+                        series={[540, 420, 180, 107]}
+                        height={300}
+                      />
+                    </ComponentCard>
+                  </div>
+                ),
+              },
+            ]}
+          />
+        </Section>
+
         <Section id="design-tokens" title="Design Tokens">
           <ComponentCard title="Semantic Colors" desc="Light (kiri) vs Dark (kanan). Panggil via var(--token).">
             <div className="mb-3 flex items-center gap-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
@@ -390,6 +860,56 @@ export default function UIKitPage() {
               <Button variant="primary" glow>Glow Effect</Button>
               <Button variant="primary" sheen glow size="lg">Sheen + Glow</Button>
               <Button variant="soft" sheen>Soft Sheen</Button>
+            </div>
+          </ComponentCard>
+          <ComponentCard title="Feedback Setelah Klik" desc="State sukses sementara agar user tahu aksi tombol sudah diterima.">
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="primary"
+                sheen
+                onClick={() => showClickedFeedback("save")}
+                startIcon={clickedFeedback.save ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                className={clickedFeedback.save ? "!bg-[var(--color-emerald)] hover:!bg-[var(--color-emerald-hover)]" : ""}
+              >
+                {clickedFeedback.save ? "Tersimpan" : "Simpan"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => showClickedFeedback("send")}
+                startIcon={clickedFeedback.send ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                className={clickedFeedback.send ? "!bg-[var(--color-emerald-light)] !text-[var(--color-emerald)] !ring-[var(--color-emerald)]" : ""}
+              >
+                {clickedFeedback.send ? "Terkirim" : "Kirim Reminder"}
+              </Button>
+              <Button
+                variant="soft"
+                onClick={() => showClickedFeedback("confirm")}
+                startIcon={<Check className="h-4 w-4" />}
+                className={clickedFeedback.confirm ? "!bg-[var(--color-emerald)] !text-white hover:!bg-[var(--color-emerald-hover)]" : ""}
+              >
+                {clickedFeedback.confirm ? "Dikonfirmasi" : "Konfirmasi Booking"}
+              </Button>
+            </div>
+          </ComponentCard>
+          <ComponentCard title="Export Actions" desc="3 format tampil sebagai dropdown export, 2 format tampil sebagai tombol langsung.">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">3 Format</p>
+                <ExportActionsButton
+                  label="Export"
+                  variant="primary"
+                  actions={fullExportActions}
+                  onExport={handleExportAction}
+                />
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">2 Format</p>
+                <ExportActionsButton
+                  variant="outline"
+                  actions={compactExportActions}
+                  onExport={handleExportAction}
+                />
+              </div>
             </div>
           </ComponentCard>
           <ComponentCard title="Sizes" desc="sm, md, lg">
@@ -664,6 +1184,34 @@ export default function UIKitPage() {
               <TextInput label="Dengan hint" placeholder="Username" hint="Minimal 4 karakter" />
             </div>
           </ComponentCard>
+          <ComponentCard title="Label dengan Tooltip" desc="Gunakan labelInfo untuk memberi konteks singkat tanpa memenuhi form.">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <TextInput
+                label="Kode Member"
+                labelInfo="Kode unik untuk identifikasi member pada check-in, booking, dan invoice."
+                placeholder="MBR-001"
+                required
+              />
+              <TextInput
+                label="Limit Booking"
+                labelInfo="Jumlah maksimal booking aktif yang bisa dimiliki member dalam satu waktu."
+                type="number"
+                placeholder="3"
+              />
+              <TextInput
+                label="Email Invoice"
+                labelInfo="Invoice dan bukti pembayaran akan dikirim ke alamat email ini."
+                type="email"
+                placeholder="billing@padelhub.io"
+              />
+              <TextInput
+                label="Nama PIC"
+                labelInfo="Kontak utama yang akan dihubungi untuk perubahan jadwal atau konfirmasi pembayaran."
+                labelInfoPlacement="bottom"
+                placeholder="Raka Pradana"
+              />
+            </div>
+          </ComponentCard>
           <ComponentCard title="States">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <TextInput label="Success" defaultValue="Andi Wijaya" success successText="Data valid" />
@@ -752,6 +1300,23 @@ export default function UIKitPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <DatePicker mode="single" label="Tanggal" placeholder="Pilih tanggal" />
               <DatePicker mode="range" label="Rentang Tanggal" placeholder="Pilih rentang" />
+            </div>
+          </ComponentCard>
+          <ComponentCard title="Format dd/mm/yyyy" desc="Setiap segmen bisa diketik langsung atau dipilih dari dropdown.">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <SegmentedDateInput
+                label="Tanggal Lahir"
+                labelInfo="Gunakan format tanggal Indonesia: hari, bulan, lalu tahun."
+                hint={`Value: ${birthDate ? birthDate.toLocaleDateString("id-ID") : "Belum dipilih"}`}
+                onChange={(date) => setBirthDate(date)}
+              />
+              <SegmentedDateInput
+                label="Tanggal Mulai Membership"
+                defaultValue={new Date(2026, 5, 10)}
+                minYear={2020}
+                maxYear={2035}
+                hint="Dropdown tahun dibatasi sesuai kebutuhan bisnis."
+              />
             </div>
           </ComponentCard>
           <ComponentCard title="Month & Time">
@@ -916,6 +1481,40 @@ export default function UIKitPage() {
                 { key: "type", header: "Tipe", sortable: true, accessor: (r) => r.type, sortValue: (r) => r.type },
                 { key: "visits", header: "Kunjungan", sortable: true, align: "right", accessor: (r) => <span className="tabular-nums">{r.visits}</span>, sortValue: (r) => r.visits },
                 { key: "joined", header: "Bergabung", sortable: true, accessor: (r) => r.joined, sortValue: (r) => r.joined },
+              ]}
+            />
+          </ComponentCard>
+          <ComponentCard title="Search + Nomor Baris" desc="Search berada di atas tabel, nomor otomatis muncul di kolom paling kiri.">
+            <DataTable
+              rowKey={(r) => r.id}
+              searchable
+              searchPlaceholder="Cari member, paket, atau status..."
+              showRowNumber
+              paginated
+              defaultPageSize={10}
+              pageSizeOptions={[10, 25, 50]}
+              striped
+              getSearchText={(r) => `${r.name} ${r.package} ${r.status} ${r.court} ${r.createdAt} ${r.createdBy}`}
+              data={[
+                { id: "m-001", name: "Raka Pradana", package: "Elite", status: "Aktif", court: "Center Court", createdAt: "9 Juni 2026", createdBy: "Fadhil" },
+                { id: "m-002", name: "Nadia Okta", package: "Pro", status: "Aktif", court: "Sky Court", createdAt: "9 Juni 2026", createdBy: "Fadhil" },
+                { id: "m-003", name: "Bagus Saputra", package: "Casual", status: "Trial", court: "Rally Court", createdAt: "8 Juni 2026", createdBy: "Nadia" },
+                { id: "m-004", name: "Maya Sari", package: "Pro", status: "Frozen", court: "Smash Court", createdAt: "8 Juni 2026", createdBy: "Raka" },
+                { id: "m-005", name: "Yusuf Hakim", package: "Elite", status: "Aktif", court: "Center Court", createdAt: "7 Juni 2026", createdBy: "Fadhil" },
+                { id: "m-006", name: "Dewi Anjani", package: "Casual", status: "Aktif", court: "Rally Court", createdAt: "7 Juni 2026", createdBy: "Maya" },
+                { id: "m-007", name: "Reza Mahendra", package: "Pro", status: "Aktif", court: "Sky Court", createdAt: "6 Juni 2026", createdBy: "Fadhil" },
+                { id: "m-008", name: "Putri Maharani", package: "Elite", status: "Trial", court: "Center Court", createdAt: "6 Juni 2026", createdBy: "Nadia" },
+                { id: "m-009", name: "Fikri Ramadhan", package: "Casual", status: "Frozen", court: "Smash Court", createdAt: "5 Juni 2026", createdBy: "Raka" },
+                { id: "m-010", name: "Citra Lestari", package: "Pro", status: "Aktif", court: "Rally Court", createdAt: "5 Juni 2026", createdBy: "Fadhil" },
+                { id: "m-011", name: "Bayu Aditya", package: "Elite", status: "Aktif", court: "Sky Court", createdAt: "4 Juni 2026", createdBy: "Maya" },
+                { id: "m-012", name: "Larasati Putri", package: "Pro", status: "Trial", court: "Center Court", createdAt: "4 Juni 2026", createdBy: "Nadia" },
+              ]}
+              columns={[
+                { key: "name", header: "Nama Member", sortable: true, accessor: (r) => <span className="font-medium text-[var(--text-heading)]">{r.name}</span>, sortValue: (r) => r.name } as Column<{ id: string; name: string; package: string; status: string; court: string; createdAt: string; createdBy: string }>,
+                { key: "package", header: "Paket", sortable: true, accessor: (r) => r.package, sortValue: (r) => r.package },
+                { key: "status", header: "Status", sortable: true, accessor: (r) => <Badge color={r.status === "Aktif" ? "success" : r.status === "Frozen" ? "warning" : "info"}>{r.status}</Badge>, sortValue: (r) => r.status },
+                { key: "court", header: "Lapangan Favorit", sortable: true, accessor: (r) => r.court, sortValue: (r) => r.court },
+                { key: "log", header: "Log", sortable: true, accessor: (r) => <span className="text-xs text-[var(--text-caption)]">{r.createdAt} {r.createdBy}</span>, sortValue: (r) => `${r.createdAt} ${r.createdBy}` },
               ]}
             />
           </ComponentCard>
@@ -1283,6 +1882,31 @@ export default function UIKitPage() {
               height={300}
             />
           </ComponentCard>
+          <ComponentCard title="Clean Bar Chart" desc="Bar lebih tegas, label angka terlihat, dan mudah dibaca untuk insight cepat.">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_260px]">
+              <BarChart
+                variant="clean"
+                showDataLabels
+                valueSuffix=" booking"
+                height={280}
+                columnWidth="38%"
+                colors={["#2563eb", "#06b6d4", "#10b981", "#f59e0b"]}
+                categories={["Center", "Sky", "Rally", "Smash"]}
+                series={[
+                  { name: "Booking", data: [128, 96, 72, 44] },
+                ]}
+              />
+              <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-muted)] p-4">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--text-caption)]">Insight</p>
+                <p className="mt-2 text-2xl font-bold tabular-nums text-[var(--text-heading)]">340</p>
+                <p className="text-sm text-[var(--text-caption)]">total booking minggu ini</p>
+                <div className="mt-4 space-y-2 text-xs text-[var(--text-body)]">
+                  <p><span className="font-semibold text-[var(--color-primary)]">Center Court</span> memimpin demand.</p>
+                  <p>Gunakan slot siang di Smash Court untuk promo off-peak.</p>
+                </div>
+              </div>
+            </div>
+          </ComponentCard>
           <ComponentCard title="Line / Area Chart">
             <LineChart
               area
@@ -1315,6 +1939,33 @@ export default function UIKitPage() {
         <div className="h-20" />
 
         {/* Addable → Modal demo */}
+        <ModalDialog
+          isOpen={fixedConfirmModal.isOpen}
+          onClose={fixedConfirmModal.closeModal}
+          title="Konfirmasi tindakan permanen"
+          description="Gunakan pattern ini untuk hapus, reset data, atau aksi yang tidak mudah dibatalkan."
+          size="sm"
+          footer={
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" size="sm" onClick={fixedConfirmModal.closeModal}>Batal</Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  fixedConfirmModal.closeModal();
+                  toast.success("Tindakan permanen dikonfirmasi.", "Berhasil");
+                }}
+              >
+                Ya, lanjutkan
+              </Button>
+            </div>
+          }
+        >
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+            Data yang sudah diproses tidak otomatis bisa dikembalikan. Pastikan user melihat konteks aksi dengan jelas.
+          </div>
+        </ModalDialog>
+
         <ModalDialog
           isOpen={addModal.isOpen}
           onClose={addModal.closeModal}

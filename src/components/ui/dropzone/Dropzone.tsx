@@ -1,6 +1,7 @@
 "use client";
 
-import React, { ReactNode, useCallback, useRef, useState } from "react";
+import React, { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { ModalDialog } from "@/components/ui/modal";
 
 export type DropzoneFile = {
   id: string;
@@ -73,8 +74,22 @@ const Dropzone: React.FC<DropzoneProps> = ({
 }) => {
   const { maxSizeMB, accept, maxFiles } = validation;
   const [files, setFiles] = useState<DropzoneFile[]>([]);
+  const [previewFile, setPreviewFile] = useState<DropzoneFile | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const filesRef = useRef<DropzoneFile[]>([]);
+
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  useEffect(() => {
+    return () => {
+      filesRef.current.forEach((file) => {
+        if (file.preview) URL.revokeObjectURL(file.preview);
+      });
+    };
+  }, []);
 
   const validate = useCallback(
     (file: File): string | null => {
@@ -142,6 +157,7 @@ const Dropzone: React.FC<DropzoneProps> = ({
 
   const removeFile = useCallback(
     (id: string) => {
+      setPreviewFile((current) => (current?.id === id ? null : current));
       setFiles((prev) => {
         const target = prev.find((f) => f.id === id);
         if (target?.preview) URL.revokeObjectURL(target.preview);
@@ -214,14 +230,21 @@ const Dropzone: React.FC<DropzoneProps> = ({
         <div className="mt-4 space-y-2">
           {files.map((f) => (
             <div key={f.id} className="flex items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-2.5">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-muted)] text-[var(--text-muted)]">
-                {f.preview ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={f.preview} alt={f.file.name} className="h-full w-full object-cover" />
-                ) : (
+              {f.preview ? (
+                <button
+                  type="button"
+                  onClick={() => setPreviewFile(f)}
+                  className="group relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-muted)] text-[var(--text-muted)] outline-none ring-offset-2 ring-offset-[var(--surface-card)] transition hover:ring-2 hover:ring-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]"
+                  aria-label={`Lihat preview ${f.file.name}`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={f.preview} alt={f.file.name} className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105" />
+                </button>
+              ) : (
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-muted)] text-[var(--text-muted)]">
                   <FileIcon />
-                )}
-              </div>
+                </div>
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate text-sm font-medium text-[var(--text-heading)]">{f.file.name}</p>
@@ -249,6 +272,25 @@ const Dropzone: React.FC<DropzoneProps> = ({
           ))}
         </div>
       )}
+
+      <ModalDialog
+        isOpen={Boolean(previewFile)}
+        onClose={() => setPreviewFile(null)}
+        title={previewFile?.file.name}
+        description={previewFile ? `${previewFile.file.type || "Image"} - ${formatBytes(previewFile.file.size)}` : undefined}
+        size="xl"
+      >
+        {previewFile?.preview && (
+          <div className="flex max-h-[70vh] items-center justify-center rounded-xl bg-[var(--surface-muted)] p-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={previewFile.preview}
+              alt={previewFile.file.name}
+              className="max-h-[calc(70vh-1.5rem)] w-auto max-w-full rounded-lg object-contain"
+            />
+          </div>
+        )}
+      </ModalDialog>
     </div>
   );
 };

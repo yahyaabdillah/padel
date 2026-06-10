@@ -1,15 +1,19 @@
 "use client";
 
 import React, { ReactNode, useState } from "react";
+import InputLabel from "./InputLabel";
 
 type InputType = "text" | "email" | "password" | "number" | "url" | "search";
+type TooltipPlacement = "top" | "bottom" | "left" | "right";
 
 interface TextInputProps {
   type?: InputType;
   value?: string;
   defaultValue?: string;
   placeholder?: string;
-  label?: string;
+  label?: ReactNode;
+  labelInfo?: ReactNode;
+  labelInfoPlacement?: TooltipPlacement;
   hint?: string;
   startIcon?: ReactNode;
   endIcon?: ReactNode;
@@ -37,6 +41,8 @@ const TextInput: React.FC<TextInputProps> = ({
   defaultValue,
   placeholder,
   label,
+  labelInfo,
+  labelInfoPlacement,
   hint,
   startIcon,
   endIcon,
@@ -97,10 +103,13 @@ const TextInput: React.FC<TextInputProps> = ({
   return (
     <div className={className}>
       {label && (
-        <label htmlFor={id} className="mb-1.5 block text-sm font-medium text-[var(--text-body)]">
-          {label}
-          {required && <span className="ml-0.5 text-[var(--color-error,#ef4444)]">*</span>}
-        </label>
+        <InputLabel
+          htmlFor={id}
+          label={label}
+          required={required}
+          tooltip={labelInfo}
+          tooltipPlacement={labelInfoPlacement}
+        />
       )}
       <div className="relative">
         {startIcon && (

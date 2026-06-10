@@ -30,7 +30,7 @@ export type SidebarGroup = {
 
 interface SidebarProps {
   groups: SidebarGroup[];
-  activePath: string;
+  activePath?: string;
   collapsed?: boolean;
   logo?: ReactNode;
   footer?: ReactNode;
@@ -44,7 +44,7 @@ const ChevronIcon = ({ open }: { open: boolean }) => (
   </svg>
 );
 
-function isActive(path: string, href?: string) {
+function isActive(path = "", href?: string) {
   if (!href) return false;
   if (href === "/") return path === "/";
   return path === href || path.startsWith(href + "/");
@@ -205,12 +205,8 @@ const CollapsibleGroup: React.FC<{
   onNavigate?: (href: string) => void;
 }> = ({ group, path, collapsed, onNavigate }) => {
   const active = groupHasActive(path, group.items);
-  const [open, setOpen] = useState(group.defaultOpen ?? active);
-
-  // Auto-open when navigation lands inside the group.
-  React.useEffect(() => {
-    if (active) setOpen(true);
-  }, [active]);
+  const [open, setOpen] = useState(group.defaultOpen ?? false);
+  const isOpen = open || active;
 
   if (collapsed) {
     // Collapsed rail: drop the header chrome, show the icons inline.
@@ -230,16 +226,16 @@ const CollapsibleGroup: React.FC<{
         onClick={() => setOpen((o) => !o)}
         className={[
           "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors",
-          active || open
+          active || isOpen
             ? "bg-[var(--color-primary-light)] text-[var(--color-primary)]"
             : "text-[var(--text-body)] hover:bg-[var(--surface-muted)] hover:text-[var(--text-heading)]",
         ].join(" ")}
       >
         <GroupGridIcon />
         <span className="truncate">{group.title ?? "Lainnya"}</span>
-        <span className="ml-auto"><ChevronIcon open={open} /></span>
+        <span className="ml-auto"><ChevronIcon open={isOpen} /></span>
       </button>
-      {open && (
+      {isOpen && (
         <div className="mt-1 ml-3 space-y-1 border-l border-[var(--border-light)] pl-2">
           {group.items.map((item, ii) => (
             <ItemNode key={ii} item={item} path={path} collapsed={collapsed} onNavigate={onNavigate} />
@@ -252,7 +248,7 @@ const CollapsibleGroup: React.FC<{
 
 const Sidebar: React.FC<SidebarProps> = ({
   groups,
-  activePath,
+  activePath = "",
   collapsed = false,
   logo,
   footer,
