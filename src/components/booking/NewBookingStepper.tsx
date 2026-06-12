@@ -78,12 +78,14 @@ interface NewBookingStepperProps {
   initialCourtId?: string;
   initialDateKey?: string;
   initialHour?: number;
+  initialDuration?: number;
 }
 
 export default function NewBookingStepper({
   initialCourtId,
   initialDateKey,
   initialHour,
+  initialDuration,
 }: NewBookingStepperProps) {
   const router = useRouter();
   const toast = useToast();
@@ -107,7 +109,11 @@ export default function NewBookingStepper({
   const [hour, setHour] = useState<number | null>(
     initialHour !== undefined ? initialHour : null,
   );
-  const [duration, setDuration] = useState(90);
+  const [duration, setDuration] = useState(
+    initialDuration && [60, 90, 120].includes(initialDuration)
+      ? initialDuration
+      : 90,
+  );
   const [kind, setKind] = useState<CustomerKind>("member");
   const [memberId, setMemberId] = useState("");
   const [walkInName, setWalkInName] = useState("");

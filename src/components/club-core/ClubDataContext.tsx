@@ -23,7 +23,7 @@ import {
   type Booking,
 } from "@/data/padel/club/bookings";
 
-const LS_COURTS = "padelhub.club.courts.v1";
+const LS_COURTS = "padelhub.club.courts.v6";
 const LS_BOOKINGS = "padelhub.club.bookings.v1";
 
 interface ClubDataValue {

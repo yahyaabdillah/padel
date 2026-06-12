@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/context/ThemeContext";
 import { RoleProvider } from "@/context/RoleContext";
 import { AccessControlProvider } from "@/context/AccessControlContext";
 import { MenuProvider } from "@/context/MenuContext";
+import { OperatingHoursProvider } from "@/context/OperatingHoursContext";
 import { NotificationProvider } from "@/context/NotificationContext";
 import { PromoProvider } from "@/context/PromoContext";
 import { MembershipProvider } from "@/context/MembershipContext";
@@ -35,20 +36,22 @@ export default function RootLayout({
             <OnboardingProvider>
               <AccessControlProvider>
                 <MenuProvider>
-                  <NotificationProvider>
-                    <PromoProvider>
-                      <MembershipProvider>
-                        <FormBuilderProvider>
-                          <ToastProvider>
-                            <SidebarProvider>
-                              {children}
-                              <OnboardingPrompt />
-                            </SidebarProvider>
-                          </ToastProvider>
-                        </FormBuilderProvider>
-                      </MembershipProvider>
-                    </PromoProvider>
-                  </NotificationProvider>
+                  <OperatingHoursProvider>
+                    <NotificationProvider>
+                      <PromoProvider>
+                        <MembershipProvider>
+                          <FormBuilderProvider>
+                            <ToastProvider>
+                              <SidebarProvider>
+                                {children}
+                                <OnboardingPrompt />
+                              </SidebarProvider>
+                            </ToastProvider>
+                          </FormBuilderProvider>
+                        </MembershipProvider>
+                      </PromoProvider>
+                    </NotificationProvider>
+                  </OperatingHoursProvider>
                 </MenuProvider>
               </AccessControlProvider>
             </OnboardingProvider>

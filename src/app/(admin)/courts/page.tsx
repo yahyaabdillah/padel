@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
+import { useRouter } from "next/navigation";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import Button from "@/components/ui/button/Button";
 import EmptyState from "@/components/ui/feedback/EmptyState";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { ClubDataProvider, useClubData } from "@/components/club-core/ClubDataContext";
-import CourtFormModal from "@/components/club-core/CourtFormModal";
 import ToneBadge from "@/components/club-core/ToneBadge";
 import { formatIDR } from "@/components/club-core/format";
 import {
@@ -15,22 +15,30 @@ import {
   courtWallMeta,
   courtFormatMeta,
   courtStatusMeta,
+  weekdayMeta,
+  dayPeakCount,
 } from "@/data/padel/club/courts";
 
-function CourtsInner() {
-  const { courts, addCourt, updateCourt, deleteCourt } = useClubData();
-  const toast = useToast();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Court | null>(null);
+const openDaysLabel = (c: Court) => {
+  const openDays = (c.schedule ?? []).filter((s) => s.available);
+  if (openDays.length === 0) return "Tutup";
+  if (openDays.length === 7) return "Setiap hari";
+  return weekdayMeta
+    .filter((w) => openDays.some((s) => s.day === w.value))
+    .map((w) => w.short)
+    .join(", ");
+};
 
-  const openCreate = () => {
-    setEditing(null);
-    setModalOpen(true);
-  };
-  const openEdit = (c: Court) => {
-    setEditing(c);
-    setModalOpen(true);
-  };
+const totalPeakHours = (c: Court) =>
+  (c.schedule ?? []).reduce((sum, s) => sum + dayPeakCount(s), 0);
+
+function CourtsInner() {
+  const router = useRouter();
+  const { courts, deleteCourt } = useClubData();
+  const toast = useToast();
+
+  const goCreate = () => router.push("/courts/new");
+  const goEdit = (c: Court) => router.push(`/courts/${c.id}/edit`);
 
   const activeCount = courts.filter((c) => c.status === "active").length;
   const maintCount = courts.filter((c) => c.status === "maintenance").length;
@@ -41,37 +49,43 @@ function CourtsInner() {
 
   return (
     <div>
-      <PageBreadcrumb pageTitle="Courts" />
+      <PageBreadcrumb pageTitle="Lapangan" />
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           <span className="rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 dark:bg-white/5 dark:text-gray-300">
-            {courts.length} courts
+            {courts.length} lapangan
           </span>
           <span className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-            {activeCount} active
+            {activeCount} aktif
           </span>
           {maintCount > 0 && (
             <span className="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
-              {maintCount} maintenance
+              {maintCount} perbaikan
             </span>
           )}
           <span className="rounded-lg bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
-            Avg peak {formatIDR(avgPeak, true)}
+            Rata-rata peak {formatIDR(avgPeak, true)}
           </span>
         </div>
-        <Button variant="primary" sheen glow onClick={openCreate} startIcon={<span className="text-base leading-none">+</span>}>
-          Add court
+        <Button
+          variant="primary"
+          sheen
+          glow
+          onClick={goCreate}
+          startIcon={<span className="text-base leading-none">+</span>}
+        >
+          Tambah Lapangan
         </Button>
       </div>
 
       {courts.length === 0 ? (
         <EmptyState
-          title="No courts yet"
-          description="Add your first padel court to start accepting bookings."
+          title="Belum ada lapangan"
+          description="Tambahkan lapangan padel pertama Anda untuk mulai menerima booking."
           action={
-            <Button variant="primary" onClick={openCreate}>
-              Add court
+            <Button variant="primary" onClick={goCreate}>
+              Tambah Lapangan
             </Button>
           }
         />
@@ -86,14 +100,28 @@ function CourtsInner() {
                 className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white transition-all duration-300 hover:-translate-y-1 hover:shadow-theme-lg dark:border-gray-800 dark:bg-white/[0.03]"
               >
                 {/* color banner */}
-                <div className="relative h-24" style={{ background: `linear-gradient(120deg, ${c.color}, color-mix(in srgb, ${c.color} 55%, #000))` }}>
-                  <div className="absolute inset-0 opacity-20" style={{ backgroundImage: "radial-gradient(circle at 20% 30%, #fff 1px, transparent 1px)", backgroundSize: "18px 18px" }} />
+                <div
+                  className="relative h-24"
+                  style={{
+                    background: `linear-gradient(120deg, ${c.color}, color-mix(in srgb, ${c.color} 55%, #000))`,
+                  }}
+                >
+                  <div
+                    className="absolute inset-0 opacity-20"
+                    style={{
+                      backgroundImage:
+                        "radial-gradient(circle at 20% 30%, #fff 1px, transparent 1px)",
+                      backgroundSize: "18px 18px",
+                    }}
+                  />
                   <div className="absolute right-3 top-3">
                     <ToneBadge tone={sMeta.tone} variant="solid">
                       {sMeta.label}
                     </ToneBadge>
                   </div>
-                  <h3 className="absolute bottom-3 left-4 text-lg font-bold text-white drop-shadow">{c.name}</h3>
+                  <h3 className="absolute bottom-3 left-4 text-lg font-bold text-white drop-shadow">
+                    {c.name}
+                  </h3>
                 </div>
 
                 <div className="p-4">
@@ -109,17 +137,43 @@ function CourtsInner() {
 
                   <div className="mt-4 grid grid-cols-2 gap-3">
                     <div className="rounded-xl bg-gray-50 p-3 dark:bg-white/[0.03]">
-                      <p className="text-[11px] uppercase tracking-wide text-gray-400">Off-peak</p>
-                      <p className="text-sm font-semibold text-gray-800 dark:text-white/90">{formatIDR(c.priceOffPeak)}</p>
+                      <p className="text-[11px] uppercase tracking-wide text-gray-400">
+                        Normal
+                      </p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white/90">
+                        {formatIDR(c.priceOffPeak)}
+                      </p>
                     </div>
                     <div className="rounded-xl bg-brand-50 p-3 dark:bg-brand-500/10">
                       <p className="text-[11px] uppercase tracking-wide text-brand-500">Peak</p>
-                      <p className="text-sm font-semibold text-brand-700 dark:text-brand-300">{formatIDR(c.pricePeak)}</p>
+                      <p className="text-sm font-semibold text-brand-700 dark:text-brand-300">
+                        {formatIDR(c.pricePeak)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* peak schedule */}
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-gray-200 px-3 py-2 dark:border-gray-700">
+                      <span className="text-[11px] uppercase tracking-wide text-gray-400">
+                        Hari buka
+                      </span>
+                      <span className="text-right text-xs font-medium text-gray-600 dark:text-gray-300">
+                        {openDaysLabel(c)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-gray-200 px-3 py-2 dark:border-gray-700">
+                      <span className="text-[11px] uppercase tracking-wide text-gray-400">
+                        Total jam peak
+                      </span>
+                      <span className="text-right text-xs font-medium text-gray-600 dark:text-gray-300">
+                        {totalPeakHours(c)} jam / minggu
+                      </span>
                     </div>
                   </div>
 
                   <div className="mt-4 flex gap-2">
-                    <Button variant="outline" size="sm" fullWidth onClick={() => openEdit(c)}>
+                    <Button variant="outline" size="sm" fullWidth onClick={() => goEdit(c)}>
                       Edit
                     </Button>
                     <Button
@@ -128,10 +182,10 @@ function CourtsInner() {
                       className="!text-red-500 hover:!bg-red-50 dark:hover:!bg-red-500/10"
                       onClick={() => {
                         deleteCourt(c.id);
-                        toast.info(`${c.name} removed`);
+                        toast.info(`${c.name} dihapus`);
                       }}
                     >
-                      Delete
+                      Hapus
                     </Button>
                   </div>
                 </div>
@@ -140,21 +194,6 @@ function CourtsInner() {
           })}
         </div>
       )}
-
-      <CourtFormModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        editing={editing}
-        onSave={(draft, id) => {
-          if (id) {
-            updateCourt(id, draft);
-            toast.success("Court updated");
-          } else {
-            addCourt(draft);
-            toast.success("Court added");
-          }
-        }}
-      />
     </div>
   );
 }

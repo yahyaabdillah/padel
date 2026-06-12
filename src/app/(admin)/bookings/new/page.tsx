@@ -11,6 +11,7 @@ function NewBookingInner() {
   const courtParam = params.get("court") ?? undefined;
   const dateParam = params.get("date") ?? undefined;
   const hourParam = params.get("hour");
+  const durationParam = params.get("duration");
 
   return (
     <ClubDataProvider>
@@ -20,6 +21,7 @@ function NewBookingInner() {
           initialCourtId={courtParam}
           initialDateKey={dateParam}
           initialHour={hourParam !== null ? Number(hourParam) : undefined}
+          initialDuration={durationParam !== null ? Number(durationParam) : undefined}
         />
       </div>
     </ClubDataProvider>
