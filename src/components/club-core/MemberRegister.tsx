@@ -1,20 +1,25 @@
 "use client";
 
-// PadelHub — member registration wizard (MANY inputs -> Stepper on a dedicated
-// page per the project UI/UX rule). Adaptive 5-step flow; the "daily" walk-in
-// tier collapses to identity + 1 booking today + pay (PT step hidden). All
-// availability + ids are derived deterministically from inputs (no DB); the
-// final member-no + temp password are the only random values. Court bookings
-// and court-included PT sessions persist via useClubData.addBooking; the new
-// member is pushed to localStorage 'padelhub-registered-members'.
+// PadelHub — member registration (single-page grouped form, no stepper).
+// All sections render top-to-bottom in grouped cards; every field label carries
+// an info tooltip. The "daily" walk-in tier books like a normal customer (no
+// free quota, always pays) and hides the coaching section's free benefit; it
+// can still add paid coaching. Coaching is ad-hoc/casual (no fixed package) —
+// each session is priced at the coach's own rate, with the first N sessions
+// waived for tiers that bundle free coaching. Availability + ids are derived
+// deterministically from inputs (no DB); the final member-no + temp password
+// are the only random values. Court bookings and court-included PT sessions
+// persist via useClubData.addBooking; the new member is pushed to localStorage
+// 'padelhub-registered-members'.
 
-import React, { useMemo, useState } from "react";
+import React, { ReactNode, useMemo, useState } from "react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import Card from "@/components/ui/card/Card";
 import Button from "@/components/ui/button/Button";
 import TextInput from "@/components/ui/input/TextInput";
 import PhoneInput, { type Country } from "@/components/ui/input/PhoneInput";
-import Stepper, { type StepItem } from "@/components/ui/stepper/Stepper";
+import InputLabel from "@/components/ui/input/InputLabel";
+import Badge from "@/components/ui/badge/Badge";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { useClubData } from "@/components/club-core/ClubDataContext";
@@ -26,9 +31,9 @@ import {
 } from "@/data/padel/club/members";
 import { courtById } from "@/data/padel/club/courts";
 import {
+  COURT_FEE_PER_SESSION,
   ptPackages,
   ptPackageById,
-  COURT_FEE_PER_SESSION,
 } from "@/data/padel/club/pt";
 import { coachById } from "@/data/padel/engage/coaches";
 import PromoReferralInput from "@/components/shared/PromoReferralInput";
@@ -40,22 +45,57 @@ import RegisterSummary, {
 import {
   type DraftBooking,
   type DraftPtSession,
+  type CoachingMode,
   pad,
   tierJoinFee,
   tierQuota,
-  tierWaivesCoachFee,
+  tierFreeCoaching,
+  registrableTiers,
 } from "./register/types";
 
 const countries = countriesData as Country[];
-const tierOrder: MemberTier[] = ["daily", "casual", "pro", "elite"];
 
-type StepKey = "identity" | "membership" | "court" | "pt" | "review";
+const coachRate = (coachId: string): number =>
+  coachById(coachId)?.ratePerHour ?? 0;
 
 const emailValid = (e: string) =>
   e.trim().length === 0 || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
 let draftSeq = 0;
 const nextId = (p: string) => `${p}-${++draftSeq}`;
+
+/** Grouped section wrapper — numbered heading + optional info tooltip. */
+const FormSection: React.FC<{
+  step: number;
+  title: string;
+  description?: string;
+  info?: ReactNode;
+  children: ReactNode;
+}> = ({ step, title, description, info, children }) => (
+  <section className="border-b border-[var(--border-default)] pb-8 last:border-0 last:pb-0">
+    <div className="mb-5 flex items-start gap-3">
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-light)] text-xs font-bold text-[var(--color-primary)]">
+        {step}
+      </span>
+      <div>
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-sm font-semibold text-[var(--text-heading)]">
+            {title}
+          </h3>
+          {info && (
+            <InputLabel label="" tooltip={info} className="mb-0" />
+          )}
+        </div>
+        {description && (
+          <p className="mt-0.5 text-xs text-[var(--text-caption)]">
+            {description}
+          </p>
+        )}
+      </div>
+    </div>
+    {children}
+  </section>
+);
 
 export default function MemberRegister() {
   const toast = useToast();
@@ -65,94 +105,73 @@ export default function MemberRegister() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [tier, setTier] = useState<MemberTier>("casual");
+  const [tier, setTier] = useState<MemberTier>("pro");
 
-  // ── per-step assemblies ──
+  // ── per-section assemblies ──
   const [promoDiscount, setPromoDiscount] = useState(0);
   const [courtDrafts, setCourtDrafts] = useState<DraftBooking[]>([]);
   const [ptEnabled, setPtEnabled] = useState(false);
+  const [coachingMode, setCoachingMode] = useState<CoachingMode>("package");
   const [packageId, setPackageId] = useState(ptPackages[0].id);
   const [ptSessions, setPtSessions] = useState<DraftPtSession[]>([]);
 
-  const [step, setStep] = useState(0);
+  const [submitted, setSubmitted] = useState(false);
   const [done, setDone] = useState<null | { memberNo: string; password: string }>(null);
 
-  // daily collapses: no PT step, single booking today
+  // daily walk-in: books & pays like a normal customer, no free quota
   const isDaily = tier === "daily";
   const quota = tierQuota[tier];
-  const waived = tierWaivesCoachFee(tier);
+  const freeCoaching = tierFreeCoaching[tier];
+
+  // Package mode fixes the per-session coach fee; casual uses the coach's rate.
   const pkg = ptPackageById(packageId) ?? ptPackages[0];
-  const targetSessions = pkg.sessions;
-  const coachFeePerSession = pkg.pricePerSession;
-
-  // ── adaptive step model ──
-  const stepKeys: StepKey[] = useMemo(
-    () =>
-      isDaily
-        ? ["identity", "membership", "court", "review"]
-        : ["identity", "membership", "court", "pt", "review"],
-    [isDaily],
-  );
-
-  const stepItems: StepItem[] = useMemo(
-    () =>
-      stepKeys.map((k) => {
-        switch (k) {
-          case "identity":
-            return { label: "Identitas", description: "Data diri" };
-          case "membership":
-            return { label: "Membership", description: "Pilih tier" };
-          case "court":
-            return { label: "Court", description: "Booking lapangan" };
-          case "pt":
-            return { label: "Pelatih", description: "Sesi PT" };
-          case "review":
-            return { label: "Review", description: "Konfirmasi & bayar" };
-        }
-      }),
-    [stepKeys],
-  );
-
-  // clamp step when the model shrinks (e.g. switching to daily)
-  React.useEffect(() => {
-    setStep((s) => Math.min(s, stepKeys.length - 1));
-  }, [stepKeys.length]);
-
-  const key = stepKeys[step];
-  const isLast = step === stepKeys.length - 1;
+  const isPackage = coachingMode === "package";
+  const coachFeeFor = (coachId: string): number =>
+    isPackage ? pkg.pricePerSession : coachRate(coachId);
 
   // ── cost breakdown ──
   // PT "include" court sessions CONSUME the court quota (free while within quota).
   // PT "existing" court sessions use an already-booked court → Rp0 extra, no quota hit.
   // Total court slots = court bookings + PT-include-NEW-court sessions.
+  // Coaching is priced per coach rate; the first `freeCoaching` sessions have
+  // their coach fee waived (court fee, if any, still applies).
   const cost: CostBreakdown = useMemo(() => {
     const joinFee = tierJoinFee[tier];
     const appliedPromo = Math.min(promoDiscount, joinFee);
 
-    // Only "include" (book new court) counts toward quota; "existing" is free (already in courtDrafts)
     const ptNewCourtCount = ptEnabled
       ? ptSessions.filter((s) => s.courtMode === "include").length
       : 0;
 
-    // Shared quota pool: court bookings first, then PT NEW court slots
     const totalCourtSlots = courtDrafts.length + ptNewCourtCount;
     const courtIncluded = Math.min(totalCourtSlots, quota);
     const courtPaid = Math.max(totalCourtSlots - quota, 0);
 
-    // Court bookings beyond quota (first N slots are court-drafts, overflow charged)
-    const courtDraftsPaid = Math.max(courtDrafts.length - quota, 0);
     const courtFeeTotal = courtDrafts
       .slice(quota)
       .reduce((sum, d) => sum + d.price, 0);
 
-    // PT NEW court slots that exceed remaining quota after court bookings
     const quotaAfterCourts = Math.max(quota - courtDrafts.length, 0);
     const ptCourtPaid = Math.max(ptNewCourtCount - quotaAfterCourts, 0);
     const ptCourtFeeTotal = ptCourtPaid * COURT_FEE_PER_SESSION;
 
-    const ptCount = ptEnabled ? ptSessions.length : 0;
-    const ptCoachFeeTotal = ptCount * coachFeePerSession;
-    const chargedCoach = waived ? 0 : ptCoachFeeTotal;
+    const activePtSessions = ptEnabled ? ptSessions : [];
+    const ptCount = activePtSessions.length;
+    // Per-session coach fee: fixed by package, or the coach's own rate (casual).
+    const memoPkg = ptPackageById(packageId) ?? ptPackages[0];
+    const feeFor = (cId: string) =>
+      coachingMode === "package" ? memoPkg.pricePerSession : coachRate(cId);
+    // Full coach-fee total (no waiver) for display.
+    const ptCoachFeeTotal = activePtSessions.reduce(
+      (sum, s) => sum + feeFor(s.coachId),
+      0,
+    );
+    // Charged coach fee: first `freeCoaching` sessions waived.
+    const chargedCoach = activePtSessions
+      .slice(freeCoaching)
+      .reduce((sum, s) => sum + feeFor(s.coachId), 0);
+    const ptCoachWaivedTotal = ptCoachFeeTotal - chargedCoach;
+    const freeUsed = Math.min(ptCount, freeCoaching);
 
     const grandTotal =
       Math.max(joinFee - appliedPromo, 0) +
@@ -166,8 +185,11 @@ export default function MemberRegister() {
       courtPaid,
       courtFeeTotal,
       ptCoachFeeTotal,
+      ptCoachChargedTotal: chargedCoach,
+      ptCoachWaivedTotal,
       ptCourtFeeTotal,
-      ptCoachWaived: waived && ptCount > 0,
+      freeCoaching,
+      freeUsed,
       promoDiscount: appliedPromo,
       grandTotal,
     };
@@ -178,34 +200,36 @@ export default function MemberRegister() {
     quota,
     ptEnabled,
     ptSessions,
-    coachFeePerSession,
-    waived,
+    freeCoaching,
+    coachingMode,
+    packageId,
   ]);
 
-  // ── per-step validation ──
+  // ── validation ──
   const identityValid =
     name.trim().length >= 2 &&
     phone.replace(/\D/g, "").length >= 8 &&
     emailValid(email);
   const courtValid = isDaily ? courtDrafts.length === 1 : true;
-  const ptValid = !ptEnabled || ptSessions.length === targetSessions;
-
-  const canNext = (() => {
-    switch (key) {
-      case "identity":
-        return identityValid;
-      case "court":
-        return courtValid;
-      case "pt":
-        return ptValid;
-      default:
-        return true;
-    }
-  })();
+  // Package mode: must schedule exactly the package's session count.
+  // Casual mode: at least one session.
+  const ptValid =
+    !ptEnabled ||
+    (isPackage
+      ? ptSessions.length === pkg.sessions
+      : ptSessions.length > 0);
+  const canSubmit = identityValid && courtValid && ptValid;
 
   // ── persistence ──
   const finalize = () => {
-    if (!canNext) return;
+    setSubmitted(true);
+    if (!canSubmit) {
+      toast.error(
+        "Lengkapi data wajib sebelum menyimpan.",
+        "Form belum lengkap",
+      );
+      return;
+    }
 
     const customerLabel = isDaily ? `Walk-in · ${name.trim()}` : name.trim();
 
@@ -233,7 +257,9 @@ export default function MemberRegister() {
     });
 
     // PT sessions — only "include" (new court) creates a booking; "existing"
-    // reuses the court already persisted from step 3, "exclude" has no court.
+    // reuses the court already persisted, "exclude" has no court. The first
+    // `freeCoaching` sessions (across all sessions, in order) have the coach
+    // fee waived.
     if (ptEnabled) {
       const quotaAfterCourts = Math.max(quota - courtDrafts.length, 0);
       let ptCourtUsed = 0;
@@ -248,6 +274,10 @@ export default function MemberRegister() {
           const courtIncludedHere = ptCourtUsed < quotaAfterCourts;
           ptCourtUsed++;
           const courtCharge = courtIncludedHere ? 0 : COURT_FEE_PER_SESSION;
+          // free-coaching applies by overall session order
+          const sessionIndex = ptSessions.indexOf(s);
+          const coachIsFree = sessionIndex < freeCoaching;
+          const coachCharge = coachIsFree ? 0 : coachFeeFor(s.coachId);
           addBooking({
             courtId: s.courtId!,
             start: startIso,
@@ -256,7 +286,7 @@ export default function MemberRegister() {
             status: "confirmed",
             customer: customerLabel,
             partySize: court?.format === "single" ? 2 : 4,
-            price: (waived ? 0 : coachFeePerSession) + courtCharge,
+            price: coachCharge + courtCharge,
             note: courtIncludedHere
               ? `PT w/ ${coach?.name ?? "coach"} · court included`
               : `PT w/ ${coach?.name ?? "coach"}`,
@@ -265,8 +295,6 @@ export default function MemberRegister() {
         });
     }
 
-    // member -> localStorage (onboarded=false; first-login onboarding fills the
-    // optional player profile later).
     const memberNo = isDaily
       ? `PHB-DAY-${String(100 + Math.floor(Math.random() * 899))}`
       : `PHB-2026-${String(1000 + Math.floor(Math.random() * 8999))}`;
@@ -281,6 +309,8 @@ export default function MemberRegister() {
         email: email.trim(),
         tier,
         coachingInterest: ptEnabled,
+        coachingMode: ptEnabled ? coachingMode : undefined,
+        coachingPackage: ptEnabled && isPackage ? packageId : undefined,
         isDaily,
         courtBookings: courtDrafts.length,
         ptSessions: ptEnabled ? ptSessions.length : 0,
@@ -300,23 +330,18 @@ export default function MemberRegister() {
     );
   };
 
-  const goNext = () => {
-    if (!canNext) return;
-    if (isLast) finalize();
-    else setStep((s) => s + 1);
-  };
-
   const reset = () => {
     setName("");
     setPhone("");
     setEmail("");
-    setTier("casual");
+    setTier("pro");
     setPromoDiscount(0);
     setCourtDrafts([]);
     setPtEnabled(false);
+    setCoachingMode("package");
     setPackageId(ptPackages[0].id);
     setPtSessions([]);
-    setStep(0);
+    setSubmitted(false);
     setDone(null);
   };
 
@@ -335,106 +360,141 @@ export default function MemberRegister() {
     );
   }
 
+  let sectionNo = 0;
+
   return (
     <div>
       <PageBreadcrumb pageTitle="Registrasi Member" />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* ── Wizard ── */}
+        {/* ── Form ── */}
         <div className="lg:col-span-2">
           <Card padding="lg">
-            <Stepper
-              steps={stepItems}
-              currentStep={step}
-              onStepClick={(i) => i < step && setStep(i)}
-            />
-
-            <div className="mt-8">
-              {/* Step: Identitas */}
-              {key === "identity" && (
-                <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                  <div className="sm:col-span-2">
-                    <TextInput
-                      label="Nama Lengkap"
-                      value={name}
-                      onChange={setName}
-                      placeholder="cth. Andi Wijaya"
-                      required
-                      hint="Nama lengkap sesuai identitas"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <PhoneInput
-                      label="Nomor Telepon"
-                      countries={countries}
-                      value={phone}
-                      onChange={(full) => setPhone(full)}
-                      hint="Format: +62 8xx xxxx xxxx"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <TextInput
-                      label="Email (opsional)"
-                      type="email"
-                      value={email}
-                      onChange={setEmail}
-                      placeholder="cth. andi@email.com"
-                      validate
-                      hint="Digunakan untuk login & notifikasi"
-                    />
-                  </div>
+            <div className="space-y-8">
+              {/* Identitas */}
+              <FormSection
+                step={++sectionNo}
+                title="Identitas"
+                description="Data diri member"
+                info="Informasi dasar untuk membuat akun member dan menghubungi mereka."
+              >
+                <div className="grid grid-cols-1 gap-5">
+                  <TextInput
+                    label="Nama Lengkap"
+                    labelInfo="Nama lengkap sesuai kartu identitas. Akan tampil di profil & invoice."
+                    value={name}
+                    onChange={setName}
+                    placeholder="cth. Andi Wijaya"
+                    required
+                    error={submitted && name.trim().length < 2}
+                    errorText="Nama minimal 2 karakter"
+                  />
+                  <PhoneInput
+                    label="Nomor Telepon"
+                    labelInfo="Nomor aktif untuk notifikasi booking & WhatsApp. Format: +62 8xx xxxx xxxx."
+                    required
+                    countries={countries}
+                    value={phone}
+                    onChange={(full) => setPhone(full)}
+                    error={submitted && phone.replace(/\D/g, "").length < 8}
+                    hint={
+                      submitted && phone.replace(/\D/g, "").length < 8
+                        ? "Nomor telepon belum valid"
+                        : "Format: +62 8xx xxxx xxxx"
+                    }
+                  />
+                  <TextInput
+                    label="Email (opsional)"
+                    labelInfo="Digunakan untuk login ke member portal & notifikasi email. Boleh dikosongkan."
+                    type="email"
+                    value={email}
+                    onChange={setEmail}
+                    placeholder="cth. andi@email.com"
+                    validate
+                    hint="Digunakan untuk login & notifikasi"
+                  />
                 </div>
-              )}
+              </FormSection>
 
-              {/* Step: Membership */}
-              {key === "membership" && (
+              {/* Membership */}
+              <FormSection
+                step={++sectionNo}
+                title="Membership"
+                description="Pilih tier keanggotaan"
+                info="Tier menentukan join fee, kuota court gratis, dan jatah coaching gratis."
+              >
                 <div className="space-y-5">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    {tierOrder.map((t) => {
-                      const meta = memberTierMeta[t];
-                      const active = t === tier;
-                      const q = tierQuota[t];
-                      return (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => setTier(t)}
-                          className={[
-                            "rounded-2xl border p-4 text-left transition-all",
-                            active
-                              ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
-                              : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
-                          ].join(" ")}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span
-                              className="rounded-full px-2.5 py-0.5 text-xs font-semibold text-white"
-                              style={{ background: meta.color }}
-                            >
-                              {meta.label}
-                            </span>
-                            <span className="text-sm font-bold text-[var(--text-heading)]">
-                              {tierJoinFee[t] === 0 ? "Gratis" : formatIDR(tierJoinFee[t])}
-                            </span>
-                          </div>
-                          <p className="mt-2 text-xs text-[var(--text-caption)]">
-                            {meta.perk}
-                          </p>
-                          <p className="mt-1 text-xs font-medium text-[var(--text-body)]">
-                            {q > 0
-                              ? `${q} court booking included`
-                              : "Pay-as-you-play"}
-                            {t === "elite" && " · free coaching"}
-                          </p>
-                        </button>
-                      );
-                    })}
+                  <div>
+                    <InputLabel
+                      label="Tier Membership"
+                      tooltip="Daily Walk-in = booking sekali main, bayar seperti biasa, tanpa join fee. Pro/Elite punya kuota court included & jatah coaching gratis."
+                    />
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {registrableTiers.map((t) => {
+                        const meta = memberTierMeta[t];
+                        const active = t === tier;
+                        const q = tierQuota[t];
+                        const free = tierFreeCoaching[t];
+                        return (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setTier(t)}
+                            className={[
+                              "rounded-2xl border p-4 text-left transition-all",
+                              active
+                                ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
+                                : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
+                            ].join(" ")}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className="rounded-full px-2.5 py-0.5 text-xs font-semibold text-white"
+                                style={{ background: meta.color }}
+                              >
+                                {meta.label}
+                              </span>
+                              <span className="text-sm font-bold text-[var(--text-heading)]">
+                                {tierJoinFee[t] === 0 ? "Tanpa join fee" : formatIDR(tierJoinFee[t])}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-xs text-[var(--text-caption)]">
+                              {meta.perk}
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {q > 0 && (
+                                <Badge size="sm" color="info" variant="light">
+                                  {q}x court included
+                                </Badge>
+                              )}
+                              {free > 0 && (
+                                <Badge size="sm" color="success" variant="light">
+                                  Free coaching {free}x
+                                </Badge>
+                              )}
+                              {t === "daily" && (
+                                <Badge size="sm" color="warning" variant="light">
+                                  Bayar per main
+                                </Badge>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-4">
-                    <p className="mb-3 text-xs font-medium text-[var(--text-caption)]">
-                      Join fee {formatIDR(cost.joinFee)}
-                    </p>
+                    <div className="mb-3 flex items-center gap-1.5">
+                      <p className="text-xs font-medium text-[var(--text-caption)]">
+                        Join fee {formatIDR(cost.joinFee)}
+                      </p>
+                      <InputLabel
+                        label=""
+                        className="mb-0"
+                        tooltip="Masukkan kode promo atau referral untuk memotong join fee."
+                      />
+                    </div>
                     <PromoReferralInput
                       scope="membership"
                       amount={cost.joinFee}
@@ -443,10 +503,23 @@ export default function MemberRegister() {
                     />
                   </div>
                 </div>
-              )}
+              </FormSection>
 
-              {/* Step: Court booking */}
-              {key === "court" && (
+              {/* Court booking */}
+              <FormSection
+                step={++sectionNo}
+                title="Booking Court"
+                description={
+                  isDaily
+                    ? "Walk-in wajib memilih 1 slot court hari ini"
+                    : "Opsional — booking court untuk member baru"
+                }
+                info={
+                  isDaily
+                    ? "Member harian harus memesan tepat 1 slot court untuk hari ini."
+                    : "Tambahkan booking court. Slot dalam kuota tier dihitung gratis, sisanya dikenakan tarif."
+                }
+              >
                 <CourtBookingStep
                   tier={tier}
                   courts={courts}
@@ -459,24 +532,37 @@ export default function MemberRegister() {
                     setCourtDrafts((prev) => prev.filter((d) => d.id !== id))
                   }
                 />
-              )}
+                {submitted && !courtValid && (
+                  <p className="mt-3 text-xs text-[var(--color-error,#ef4444)]">
+                    Member harian wajib memilih tepat 1 slot court hari ini.
+                  </p>
+                )}
+              </FormSection>
 
-              {/* Step: Pelatih / PT */}
-              {key === "pt" && (
+              {/* Pelatih / PT — tersedia untuk semua tier (daily tetap bayar) */}
+              <FormSection
+                step={++sectionNo}
+                title="Pelatih (Personal Training)"
+                description="Opsional — pilih paket atau bayar per sesi"
+                info="Aktifkan jika member ingin sesi latihan privat. Pilih model Paket (tarif tetap, jumlah sesi sesuai paket) atau Casual (bayar per sesi sesuai tarif coach). Tier dengan benefit free coaching otomatis menggratiskan beberapa sesi pertama."
+              >
                 <PtSessionStep
-                  tier={tier}
                   enabled={ptEnabled}
                   onToggle={(v) => {
                     setPtEnabled(v);
                     if (!v) setPtSessions([]);
+                  }}
+                  mode={coachingMode}
+                  onModeChange={(m) => {
+                    setCoachingMode(m);
+                    setPtSessions([]);
                   }}
                   packageId={packageId}
                   onPackageChange={(id) => {
                     setPackageId(id);
                     setPtSessions([]);
                   }}
-                  targetSessions={targetSessions}
-                  coachFeePerSession={coachFeePerSession}
+                  freeCoaching={freeCoaching}
                   courts={courts}
                   bookings={bookings}
                   courtDrafts={courtDrafts}
@@ -488,10 +574,22 @@ export default function MemberRegister() {
                     setPtSessions((prev) => prev.filter((x) => x.id !== id))
                   }
                 />
-              )}
+                {submitted && ptEnabled && !ptValid && (
+                  <p className="mt-3 text-xs text-[var(--color-error,#ef4444)]">
+                    {isPackage
+                      ? `Jadwalkan tepat ${pkg.sessions} sesi sesuai paket yang dipilih.`
+                      : "Tambahkan minimal 1 sesi coaching atau matikan opsi pelatih."}
+                  </p>
+                )}
+              </FormSection>
 
-              {/* Step: Review */}
-              {key === "review" && (
+              {/* Ringkasan */}
+              <FormSection
+                step={++sectionNo}
+                title="Ringkasan"
+                description="Periksa kembali sebelum menyimpan"
+                info="Pastikan semua data sudah benar. Klik konfirmasi untuk menyimpan member & memproses pembayaran."
+              >
                 <div className="space-y-5">
                   <div>
                     <h4 className="mb-3 text-sm font-semibold text-[var(--text-heading)]">
@@ -544,11 +642,12 @@ export default function MemberRegister() {
                         Coaching sessions
                       </h4>
                       <div className="space-y-2">
-                        {ptSessions.map((s) => {
+                        {ptSessions.map((s, idx) => {
                           const coach = coachById(s.coachId);
                           const c = s.courtId ? courtById(s.courtId) : undefined;
+                          const isFree = idx < freeCoaching;
                           const lineFee =
-                            (waived ? 0 : coachFeePerSession) +
+                            (isFree ? 0 : coachFeeFor(s.coachId)) +
                             (s.courtMode === "include" ? COURT_FEE_PER_SESSION : 0);
                           const courtLabel =
                             s.courtMode === "existing"
@@ -564,6 +663,11 @@ export default function MemberRegister() {
                               <span className="text-[var(--text-body)]">
                                 {coach?.name} · {s.dateKey} · {s.time} ·{" "}
                                 {courtLabel}
+                                {isFree && (
+                                  <span className="ml-1 font-medium text-emerald-500">
+                                    · gratis
+                                  </span>
+                                )}
                               </span>
                               <span className="font-semibold text-[var(--text-heading)]">
                                 {formatIDR(lineFee)}
@@ -575,26 +679,19 @@ export default function MemberRegister() {
                     </div>
                   )}
                 </div>
-              )}
+              </FormSection>
             </div>
 
-            {/* Footer nav */}
-            <div className="mt-8 flex items-center justify-between border-t border-[var(--border-default)] pt-5">
-              <Button
-                variant="ghost"
-                onClick={() => setStep((s) => Math.max(s - 1, 0))}
-                disabled={step === 0}
-              >
-                Back
-              </Button>
+            {/* Submit */}
+            <div className="mt-8 flex items-center justify-end border-t border-[var(--border-default)] pt-5">
               <Button
                 variant="primary"
                 sheen
-                glow={isLast}
-                disabled={!canNext}
-                onClick={goNext}
+                glow
+                disabled={submitted && !canSubmit}
+                onClick={finalize}
               >
-                {isLast ? `Konfirmasi & Bayar · ${formatIDR(cost.grandTotal)}` : "Lanjut"}
+                {`Konfirmasi & Bayar · ${formatIDR(cost.grandTotal)}`}
               </Button>
             </div>
           </Card>

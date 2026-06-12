@@ -15,9 +15,10 @@ import { seedMenuItems, type MenuItem } from "@/data/padel/menus";
  * platform Menu Builder, persisted to localStorage. The sidebar renders from
  * getMenusForRole() (further filtered by AccessControl + permissions). */
 
-// Bumped to v5 to force a reseed: menu icons migrated from internal icon keys
-// to lucide-react export names (resolved dynamically in AppSidebar).
-const STORAGE_KEY = "padelhub-menu-items-v5";
+// Bumped to v6 to force a reseed: parent/group menu icons now use distinct
+// lucide names (Booking & Check-in, Manage Member, Coaching, Finance,
+// Marketing, Master) instead of the generic "List" fallback.
+const STORAGE_KEY = "padelhub-menu-items-v6";
 
 export interface MenuTree extends MenuItem {
   children: MenuItem[];

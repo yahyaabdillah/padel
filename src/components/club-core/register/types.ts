@@ -7,21 +7,33 @@ import type { MemberTier } from "@/data/padel/club/members";
 /** Joining / first-payment fee per tier (IDR). Daily walk-in is free. */
 export const tierJoinFee: Record<MemberTier, number> = {
   daily: 0,
-  casual: 150_000,
+  casual: 150_000, // legacy (seed members only) — not offered at registration
   pro: 450_000,
   elite: 850_000,
 };
 
 /** Court bookings included in the membership before pay-as-you-play kicks in. */
 export const tierQuota: Record<MemberTier, number> = {
-  daily: 1, // single walk-in session, today only
-  casual: 0, // pay-as-you-play
+  daily: 0, // walk-in: booking biasa, tetap bayar
+  casual: 0, // legacy
   pro: 4,
   elite: 8,
 };
 
-/** Elite waives the PT coach fee (court fee still applies when included). */
-export const tierWaivesCoachFee = (tier: MemberTier): boolean => tier === "elite";
+/**
+ * Free coaching sessions bundled with the tier (coach fee waived for the first
+ * N PT sessions). Court fee — when a new court is reserved for the session —
+ * still applies. Daily/casual get none and pay full coach fee per session.
+ */
+export const tierFreeCoaching: Record<MemberTier, number> = {
+  daily: 0,
+  casual: 0,
+  pro: 2,
+  elite: 8,
+};
+
+/** Tiers offered in the registration form (casual is legacy, not selectable). */
+export const registrableTiers: MemberTier[] = ["daily", "pro", "elite"];
 
 /** A court booking the user assembled in step 3 (pre-persist). */
 export interface DraftBooking {
@@ -36,6 +48,9 @@ export interface DraftBooking {
 
 /** Court arrangement mode for a PT session. */
 export type PtCourtMode = "existing" | "include" | "exclude";
+
+/** Coaching pricing model chosen at registration. */
+export type CoachingMode = "package" | "casual";
 
 /** A single PT session the user assembled in step 4 (pre-persist). */
 export interface DraftPtSession {

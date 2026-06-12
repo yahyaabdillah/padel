@@ -1,10 +1,16 @@
 "use client";
 
-// Step 4 — Personal training. Toggle "Pakai pelatih?"; when on, the user
-// assembles N sessions. Each session: day -> coach -> time slot (only slots
-// coachAvailability marks free, minus slots already taken by other chosen
-// sessions for that coach+date) -> court include/exclude. Elite waives the
-// coach fee (shown struck-through). Hidden entirely for tier=daily upstream.
+// Coaching section — supports TWO models, chosen via a mode toggle:
+//  1. "Paket"  — pick a fixed PT package (4/8/12 sessions). Price per session is
+//     fixed by the package (same rate regardless of coach). The user must
+//     schedule exactly `package.sessions` sessions.
+//  2. "Casual" — ad-hoc, no package. Add sessions one by one; each session is
+//     priced at the chosen coach's own ratePerHour.
+// For both models: each session = day -> coach -> time slot (only free slots,
+// minus slots already taken by other chosen sessions for that coach+date) ->
+// court include/exclude/existing. Tiers with a free-coaching benefit (pro/elite)
+// waive the coach fee for the first N sessions (shown as a badge); beyond that —
+// and for daily walk-ins — every session is paid.
 
 import React, { useMemo, useState } from "react";
 import DatePicker from "@/components/ui/datepicker/DatePicker";
@@ -25,29 +31,35 @@ import {
   coachAvailability,
   COURT_FEE_PER_SESSION,
   ptPackages,
+  ptPackageById,
 } from "@/data/padel/club/pt";
-import type { MemberTier } from "@/data/padel/club/members";
 import {
   type DraftPtSession,
   type DraftBooking,
   type PtCourtMode,
-  tierWaivesCoachFee,
+  type CoachingMode,
   TODAY_KEY,
 } from "./types";
 
 const activeCoaches: Coach[] = coaches.filter((c) => c.status === "active");
 
+const coachRate = (coachId: string): number =>
+  coachById(coachId)?.ratePerHour ?? 0;
+
 interface PtSessionStepProps {
-  tier: MemberTier;
   enabled: boolean;
   onToggle: (v: boolean) => void;
+  /** coaching pricing model */
+  mode: CoachingMode;
+  onModeChange: (m: CoachingMode) => void;
+  /** selected package id (used when mode === "package") */
   packageId: string;
   onPackageChange: (id: string) => void;
-  targetSessions: number;
-  coachFeePerSession: number;
+  /** free coaching sessions granted by the tier (coach fee waived) */
+  freeCoaching: number;
   courts: Court[];
   bookings: Booking[];
-  /** court bookings already drafted in step 3 (block court+hour reuse) */
+  /** court bookings already drafted in the court section (block court+hour reuse) */
   courtDrafts: DraftBooking[];
   sessions: DraftPtSession[];
   onAdd: (s: Omit<DraftPtSession, "id">) => void;
@@ -55,13 +67,13 @@ interface PtSessionStepProps {
 }
 
 const PtSessionStep: React.FC<PtSessionStepProps> = ({
-  tier,
   enabled,
   onToggle,
+  mode,
+  onModeChange,
   packageId,
   onPackageChange,
-  targetSessions,
-  coachFeePerSession,
+  freeCoaching,
   courts,
   bookings,
   courtDrafts,
@@ -69,7 +81,6 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
   onAdd,
   onRemove,
 }) => {
-  const waived = tierWaivesCoachFee(tier);
   const activeCourts = useMemo(
     () => courts.filter((c) => c.status === "active"),
     [courts],
@@ -82,6 +93,15 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
   const [courtId, setCourtId] = useState(activeCourts[0]?.id ?? "");
 
   const selectedKey = dateKey(date);
+
+  const pkg = ptPackageById(packageId) ?? ptPackages[0];
+  const isPackage = mode === "package";
+  const targetSessions = isPackage ? pkg.sessions : 0;
+  // Per-session coach fee: fixed by package, or the coach's own rate (casual).
+  const feeFor = (cId: string) =>
+    isPackage ? pkg.pricePerSession : coachRate(cId);
+  const editorCoachFee = feeFor(coachId);
+  const freeRemaining = Math.max(freeCoaching - sessions.length, 0);
 
   // Coach's deterministic availability minus slots already chosen for that
   // coach+date in this registration (no coach double-book).
@@ -133,7 +153,8 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
     courtMode === "exclude" ||
     courtMode === "existing" ||
     (courtId !== "" && courtFreeAt(courtId));
-  const full = sessions.length >= targetSessions;
+  // In package mode the user can't exceed the package's session count.
+  const full = isPackage && sessions.length >= targetSessions;
   const canAdd = !!coachId && !!time && courtOk && !full;
 
   const handleAdd = () => {
@@ -161,6 +182,9 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
     setTime("");
   };
 
+  // The coach fee for the *next* session is waived while free coaching remains.
+  const nextFree = freeRemaining > 0;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-4">
@@ -169,8 +193,7 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
             Pakai pelatih?
           </p>
           <p className="text-xs text-[var(--text-caption)]">
-            Add private coaching sessions to this membership.
-            {waived && " Elite — coach fee waived."}
+            Tambahkan sesi latihan privat — pilih paket atau bayar per sesi.
           </p>
         </div>
         <Switch checked={enabled} onChange={onToggle} />
@@ -178,46 +201,104 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
 
       {enabled && (
         <>
-          {/* Package = number of sessions */}
+          {/* Coaching mode: package vs casual */}
           <div>
             <span className="mb-2 block text-xs font-medium text-[var(--text-caption)]">
-              How many sessions?
+              Model coaching
             </span>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {ptPackages.map((p) => {
-                const active = p.id === packageId;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => onPackageChange(p.id)}
-                    className={[
-                      "rounded-2xl border p-3 text-left transition-all",
-                      active
-                        ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
-                        : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-center justify-between">
-                      <Badge size="sm" color="info" variant="light">
-                        {p.sessions}x
-                      </Badge>
-                    </div>
-                    <p className="mt-1.5 truncate text-xs text-[var(--text-caption)]">
-                      {p.label}
-                    </p>
-                    <p className="mt-0.5 text-xs font-semibold text-[var(--color-primary)]">
-                      {formatIDR(p.pricePerSession)}/sesi
-                    </p>
-                  </button>
-                );
-              })}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => onModeChange("package")}
+                className={[
+                  "rounded-2xl border p-4 text-left transition-all",
+                  isPackage
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
+                    : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
+                ].join(" ")}
+              >
+                <p className="text-sm font-semibold text-[var(--text-heading)]">
+                  Paket
+                </p>
+                <p className="mt-1 text-xs text-[var(--text-caption)]">
+                  Beli paket sesi (4/8/12) dengan tarif tetap per sesi. Hemat untuk progres rutin.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => onModeChange("casual")}
+                className={[
+                  "rounded-2xl border p-4 text-left transition-all",
+                  !isPackage
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
+                    : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
+                ].join(" ")}
+              >
+                <p className="text-sm font-semibold text-[var(--text-heading)]">
+                  Casual / per-sesi
+                </p>
+                <p className="mt-1 text-xs text-[var(--text-caption)]">
+                  Tanpa paket. Bayar per sesi sesuai tarif coach yang dipilih.
+                </p>
+              </button>
             </div>
-            <p className="mt-2 text-xs text-[var(--text-caption)]">
-              Added {sessions.length} of {targetSessions} session
-              {targetSessions > 1 ? "s" : ""}.
-            </p>
           </div>
+
+          {/* Package picker (package mode only) */}
+          {isPackage && (
+            <div>
+              <span className="mb-2 block text-xs font-medium text-[var(--text-caption)]">
+                Pilih paket
+              </span>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {ptPackages.map((p) => {
+                  const active = p.id === packageId;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => onPackageChange(p.id)}
+                      className={[
+                        "rounded-2xl border p-3 text-left transition-all",
+                        active
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
+                          : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-center justify-between">
+                        <Badge size="sm" color="info" variant="light">
+                          {p.sessions}x
+                        </Badge>
+                      </div>
+                      <p className="mt-1.5 truncate text-xs text-[var(--text-caption)]">
+                        {p.label}
+                      </p>
+                      <p className="mt-0.5 text-xs font-semibold text-[var(--color-primary)]">
+                        {formatIDR(p.pricePerSession)}/sesi
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-xs text-[var(--text-caption)]">
+                Terjadwal {sessions.length} dari {targetSessions} sesi.
+              </p>
+            </div>
+          )}
+
+          {/* Free-coaching benefit banner */}
+          {freeCoaching > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+              <Badge size="sm" color="success" variant="solid">
+                Free coaching {freeCoaching}x
+              </Badge>
+              <span className="text-xs text-emerald-700 dark:text-emerald-300">
+                {freeRemaining > 0
+                  ? `${freeRemaining} sesi gratis tersisa — coach fee tidak ditagih.`
+                  : "Kuota gratis habis. Sesi berikutnya dikenakan coach fee."}
+              </span>
+            </div>
+          )}
 
           {/* Session editor */}
           <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)] p-4">
@@ -240,7 +321,9 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
                 options={activeCoaches.map((c) => ({
                   value: c.id,
                   label: c.name,
-                  desc: c.level,
+                  desc: isPackage
+                    ? c.level
+                    : `${c.level} · ${formatIDR(c.ratePerHour)}/sesi`,
                 }))}
                 value={coachId}
                 clearable={false}
@@ -292,7 +375,6 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
                 Court arrangement
               </span>
               {(() => {
-                // Detect overlapping court drafts at same date+hour
                 const hour = time ? Number(time.slice(0, 2)) : -1;
                 const overlapping = courtDrafts.filter((d) => {
                   if (d.dateKey !== selectedKey || hour < 0) return false;
@@ -310,14 +392,14 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
                         {
                           value: "existing" as const,
                           label: `Pakai court yang sudah di-book`,
-                          description: `${existingCourt?.name ?? "Court"} · ${selectedKey} · ${time} (sudah dibayar/included — Rp0 tambahan)`,
+                          description: `${existingCourt?.name ?? "Court"} · ${selectedKey} · ${time} (sudah dibayar — Rp0 tambahan)`,
                         },
                       ]
                     : []),
                   {
                     value: "include" as const,
                     label: "Reserve court baru",
-                    description: `Book court terpisah untuk sesi PT. +${formatIDR(COURT_FEE_PER_SESSION)} / session (atau gratis jika masih dalam kuota).`,
+                    description: `Book court terpisah untuk sesi PT. +${formatIDR(COURT_FEE_PER_SESSION)} / session.`,
                   },
                   {
                     value: "exclude" as const,
@@ -325,11 +407,6 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
                     description: "Member sudah punya court sendiri, atau latihan tanpa lapangan.",
                   },
                 ];
-
-                // Auto-switch to "existing" when overlap detected and user hasn't explicitly chosen
-                if (hasExisting && courtMode === "include") {
-                  // keep include as-is — user may want a separate court
-                }
 
                 return (
                   <>
@@ -400,11 +477,14 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-[var(--text-caption)]">
                 Coach fee{" "}
-                {waived ? (
-                  <span className="line-through">{formatIDR(coachFeePerSession)}</span>
+                {nextFree ? (
+                  <>
+                    <span className="line-through">{formatIDR(editorCoachFee)}</span>{" "}
+                    <span className="font-medium text-emerald-500">Gratis (benefit)</span>
+                  </>
                 ) : (
                   <span className="font-medium text-[var(--text-body)]">
-                    {formatIDR(coachFeePerSession)}
+                    {formatIDR(editorCoachFee)}
                   </span>
                 )}
                 {courtMode === "include" && ` + court ${formatIDR(COURT_FEE_PER_SESSION)}`}
@@ -414,6 +494,11 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
                 + Add session
               </Button>
             </div>
+            {full && (
+              <p className="text-xs text-amber-500">
+                Paket {pkg.sessions}x sudah penuh. Hapus sesi untuk mengganti, atau pilih paket lebih besar.
+              </p>
+            )}
           </div>
 
           {/* Added sessions */}
@@ -422,7 +507,7 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
               <span className="block text-xs font-medium text-[var(--text-caption)]">
                 Coaching sessions
               </span>
-              {sessions.map((s) => {
+              {sessions.map((s, idx) => {
                 const coach = coachById(s.coachId);
                 const court = s.courtId
                   ? courts.find((c) => c.id === s.courtId)
@@ -433,8 +518,10 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
                     : s.courtMode === "include"
                       ? `Court: ${court?.name ?? "—"}`
                       : "Coach only";
+                const isFree = idx < freeCoaching;
+                const sessionCoachFee = feeFor(s.coachId);
                 const lineFee =
-                  (waived ? 0 : coachFeePerSession) +
+                  (isFree ? 0 : sessionCoachFee) +
                   (s.courtMode === "include" ? COURT_FEE_PER_SESSION : 0);
                 return (
                   <div
@@ -447,6 +534,11 @@ const PtSessionStep: React.FC<PtSessionStepProps> = ({
                       </p>
                       <p className="truncate text-xs text-[var(--text-caption)]">
                         {courtLabel}
+                        {isFree && (
+                          <span className="ml-1.5 font-medium text-emerald-500">
+                            · coaching gratis
+                          </span>
+                        )}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">

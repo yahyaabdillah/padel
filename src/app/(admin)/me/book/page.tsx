@@ -1,5 +1,10 @@
 "use client";
 
+// Member ▸ Book a Court — daily calendar grid. Columns = courts, rows = hours.
+// Each cell shows availability (open / booked / closed). Clicking an open slot
+// opens the booking modal where the member picks duration & confirms. The day
+// can be switched via the quick-strip or the date picker above the grid.
+
 import React, { useMemo, useState } from "react";
 import PageBreadCrumb from "@/components/common/PageBreadCrumb";
 import Button from "@/components/ui/button/Button";
@@ -18,6 +23,8 @@ import {
 } from "@/data/padel/member";
 import { tierById } from "@/data/padel/member";
 import { useRole } from "@/context/RoleContext";
+import { useMembership } from "@/context/MembershipContext";
+import { mockMembers } from "@/data/padel/club/members";
 import DatePicker from "@/components/ui/datepicker/DatePicker";
 import { CheckIcon, ClockIcon } from "@/components/member/icons";
 import PromoReferralInput from "@/components/shared/PromoReferralInput";
@@ -32,239 +39,360 @@ function nextDays(count: number) {
   for (let i = 0; i < count; i++) {
     const d = new Date(base);
     d.setDate(d.getDate() + i);
-    out.push(d.toISOString().slice(0, 10));
+    out.push(toKey(d));
   }
   return out;
 }
 
-const slotTone: Record<SlotStatus, string> = {
-  open: "border-[var(--border-default)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-light)] cursor-pointer text-[var(--text-body)]",
-  booked: "border-transparent bg-[var(--surface-muted)] text-[var(--text-muted)] line-through cursor-not-allowed",
-  mine: "border-[var(--color-secondary)] bg-[var(--color-secondary-light)] text-[var(--color-secondary)]",
-  closed: "border-transparent bg-[var(--surface-muted)]/50 text-[var(--text-muted)] cursor-not-allowed",
+const endTimeOf = (start: string, duration: number) => {
+  const [h, m] = start.split(":").map(Number);
+  const total = h * 60 + m + duration * 60;
+  return `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`;
 };
+
+interface SlotSelection {
+  courtId: string;
+  time: string;
+}
 
 export default function BookCourtPage() {
   const toast = useToast();
   const { currentUser } = useRole();
+  const { getMembershipStatus, consumeCourtQuota } = useMembership();
   const days = useMemo(() => nextDays(10), []);
   const [date, setDate] = useState(days[0]);
-  const [courtId, setCourtId] = useState(memberCourts[0].id);
+  const [selection, setSelection] = useState<SlotSelection | null>(null);
   const [duration, setDuration] = useState(1.5);
-  const [selectedTime, setSelectedTime] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmStage, setConfirmStage] = useState(false);
   const [bookedRef, setBookedRef] = useState<string | null>(null);
   const [promoDiscount, setPromoDiscount] = useState(0);
 
   const grid = useMemo(() => buildSlotGrid(date), [date]);
-  const court = courtById(courtId);
-  const slots = grid[courtId] ?? [];
   const isCustomDate = !days.includes(date);
 
   const tier = tierById((currentUser.membershipTier as "Pro") ?? "Casual");
-  const basePrice = (time: string) => {
-    const hourly = isPeakHour(time) ? court.pricePeak : court.priceOffPeak;
-    return hourly * duration;
-  };
-  const discounted = (gross: number) => Math.round(gross * (1 - tier.courtDiscountPct / 100));
-
-  const gross = selectedTime ? basePrice(selectedTime) : 0;
-  const net = discounted(gross);
-  // Promo applies to the tier-discounted subtotal; clamp so total never < 0.
-  const appliedPromo = selectedTime ? Math.min(promoDiscount, net) : 0;
-  const payable = Math.max(net - appliedPromo, 0);
-  // Map the member-side tier label to the club-engine tier the promo audience uses.
   const promoTier: ClubMemberTier = (
     (currentUser.membershipTier as string) ?? "casual"
   ).toLowerCase() as ClubMemberTier;
 
-  const handleConfirm = () => {
-    const ref = "SC-" + Math.random().toString(36).slice(2, 6).toUpperCase();
-    setBookedRef(ref);
-    setConfirmOpen(false);
-    toast.success(`Court booked! Reference ${ref}`, "Booking confirmed");
-    setSelectedTime(null);
+  // Map the logged-in portal user to a club member record (by name) so we can
+  // read their live membership quota from MembershipContext.
+  const clubMemberId = useMemo(() => {
+    const match = mockMembers.find(
+      (m) => m.name.toLowerCase() === currentUser.name.toLowerCase(),
+    );
+    return match?.id ?? null;
+  }, [currentUser.name]);
+
+  const membership = clubMemberId ? getMembershipStatus(clubMemberId) : null;
+  const quotaCovers = !!membership && membership.quotaRemaining > 0;
+
+  // ── pricing for the active selection ──
+  const court = selection ? courtById(selection.courtId) : null;
+  const gross =
+    selection && court
+      ? (isPeakHour(selection.time) ? court.pricePeak : court.priceOffPeak) * duration
+      : 0;
+  // Quota covers the whole slot (any court/hour, peak included) → Rp0.
+  const net = quotaCovers
+    ? 0
+    : Math.round(gross * (1 - tier.courtDiscountPct / 100));
+  const appliedPromo = selection ? Math.min(promoDiscount, net) : 0;
+  const payable = Math.max(net - appliedPromo, 0);
+
+  const openSlot = (courtId: string, time: string) => {
+    setSelection({ courtId, time });
+    setDuration(1.5);
+    setPromoDiscount(0);
+    setConfirmStage(false);
+  };
+
+  const closeModal = () => {
+    setSelection(null);
+    setConfirmStage(false);
     setPromoDiscount(0);
   };
 
-  const endTime = (start: string) => {
-    const [h, m] = start.split(":").map(Number);
-    const total = h * 60 + m + duration * 60;
-    return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  const handleConfirm = () => {
+    const ref = "SC-" + Math.random().toString(36).slice(2, 6).toUpperCase();
+    if (quotaCovers && clubMemberId) consumeCourtQuota(clubMemberId, 1);
+    setBookedRef(ref);
+    toast.success(
+      quotaCovers
+        ? `Court booked gratis dari kuota! Ref ${ref}`
+        : `Court booked! Reference ${ref}`,
+      "Booking confirmed",
+    );
+    closeModal();
   };
+
+  const activeDate = new Date(date + "T00:00:00");
 
   return (
     <div>
       <PageBreadCrumb pageTitle="Book a Court" />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div className="space-y-6 xl:col-span-2">
-          {/* date picker strip */}
-          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-5">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <h4 className="font-semibold text-[var(--text-heading)]">Select date</h4>
-              {/* Other date — pick any day beyond the quick strip */}
-              <div className="w-full sm:w-56">
-                <DatePicker
-                  mode="single"
-                  placeholder="Other date…"
-                  minDate={new Date(days[0] + "T00:00:00")}
-                  value={isCustomDate ? new Date(date + "T00:00:00") : null}
-                  onChange={(v) => {
-                    if (v instanceof Date) {
-                      setDate(toKey(v));
-                      setSelectedTime(null);
-                    }
-                  }}
-                />
-              </div>
-            </div>
-            <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
-              {days.map((d) => {
-                const dt = new Date(d + "T00:00:00");
-                const active = d === date;
-                return (
-                  <button
-                    key={d}
-                    onClick={() => {
-                      setDate(d);
-                      setSelectedTime(null);
-                    }}
-                    className={`flex min-w-[64px] flex-col items-center rounded-xl border px-3 py-2 transition-all ${
-                      active
-                        ? "border-transparent bg-[var(--color-primary)] text-white shadow-theme-sm"
-                        : "border-[var(--border-default)] text-[var(--text-body)] hover:border-[var(--color-primary)]"
-                    }`}
-                  >
-                    <span className="text-[11px] uppercase">
-                      {dt.toLocaleDateString("en-US", { weekday: "short" })}
-                    </span>
-                    <span className="text-lg font-bold leading-tight">{dt.getDate()}</span>
-                    <span className="text-[10px]">
-                      {dt.toLocaleDateString("en-US", { month: "short" })}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+      {/* ── Date switcher ── */}
+      <div className="mb-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h4 className="font-semibold text-[var(--text-heading)]">
+              {prettyDateLong(date)}
+            </h4>
+            <p className="text-xs text-[var(--text-muted)]">
+              Pilih slot kosong di kalender untuk booking
+            </p>
           </div>
+          <div className="w-full sm:w-56">
+            <DatePicker
+              mode="single"
+              placeholder="Tanggal lain…"
+              minDate={new Date(days[0] + "T00:00:00")}
+              value={isCustomDate ? activeDate : null}
+              onChange={(v) => {
+                if (v instanceof Date) setDate(toKey(v));
+              }}
+            />
+          </div>
+        </div>
+        {membership && membership.hasActivePlan && membership.quotaTotal > 0 && (
+          <div
+            className={[
+              "mb-3 flex flex-wrap items-center gap-2 rounded-xl border p-3",
+              quotaCovers
+                ? "border-emerald-200 bg-emerald-50 dark:border-emerald-500/30 dark:bg-emerald-500/10"
+                : "border-[var(--border-default)] bg-[var(--surface-muted)]",
+            ].join(" ")}
+          >
+            <Badge
+              size="sm"
+              color={quotaCovers ? "success" : "neutral"}
+              variant={quotaCovers ? "solid" : "light"}
+            >
+              {membership.plan?.name ?? "Member"}
+            </Badge>
+            <span className="text-xs text-[var(--text-body)]">
+              Kuota booking gratis: {membership.quotaRemaining}/{membership.quotaTotal} tersisa
+            </span>
+            {membership.resetAt && (
+              <span className="text-xs text-[var(--text-muted)]">
+                · reset {membership.resetAt}
+              </span>
+            )}
+            <span className="text-xs text-[var(--text-caption)]">
+              {quotaCovers
+                ? "— booking berikutnya GRATIS (semua lapangan & jam, termasuk peak)."
+                : "— kuota habis, booking dikenakan tarif normal."}
+            </span>
+          </div>
+        )}
+        <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
+          {days.map((d) => {
+            const dt = new Date(d + "T00:00:00");
+            const active = d === date;
+            return (
+              <button
+                key={d}
+                onClick={() => setDate(d)}
+                className={`flex min-w-[64px] flex-col items-center rounded-xl border px-3 py-2 transition-all ${
+                  active
+                    ? "border-transparent bg-[var(--color-primary)] text-white shadow-theme-sm"
+                    : "border-[var(--border-default)] text-[var(--text-body)] hover:border-[var(--color-primary)]"
+                }`}
+              >
+                <span className="text-[11px] uppercase">
+                  {dt.toLocaleDateString("en-US", { weekday: "short" })}
+                </span>
+                <span className="text-lg font-bold leading-tight">{dt.getDate()}</span>
+                <span className="text-[10px]">
+                  {dt.toLocaleDateString("en-US", { month: "short" })}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-          {/* court picker */}
-          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-5">
-            <h4 className="mb-3 font-semibold text-[var(--text-heading)]">Choose court</h4>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* ── Legend ── */}
+      <div className="mb-3 flex flex-wrap gap-4 text-xs text-[var(--text-muted)]">
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded border border-[var(--border-default)]" /> Tersedia
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded bg-[var(--surface-muted)]" /> Terisi
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full bg-amber-400" /> Jam peak
+        </span>
+      </div>
+
+      {/* ── Calendar grid ── */}
+      <div className="overflow-x-auto custom-scrollbar rounded-2xl border border-[var(--border-default)]">
+        <div
+          className="grid min-w-[720px]"
+          style={{ gridTemplateColumns: `64px repeat(${memberCourts.length}, minmax(110px, 1fr))` }}
+        >
+          {/* header row */}
+          <div className="sticky left-0 z-10 border-b border-r border-[var(--border-default)] bg-[var(--surface-muted)]" />
+          {memberCourts.map((c) => (
+            <div
+              key={c.id}
+              className="border-b border-[var(--border-default)] bg-[var(--surface-muted)] px-3 py-2.5 text-center"
+            >
+              <p className="truncate text-sm font-semibold text-[var(--text-heading)]">
+                {c.name}
+              </p>
+              <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
+                {c.zone} · {c.surface}
+              </p>
+            </div>
+          ))}
+
+          {/* time rows */}
+          {bookableHours.map((time, hi) => (
+            <React.Fragment key={time}>
+              <div className="sticky left-0 z-10 flex items-start justify-end border-r border-[var(--border-default)] bg-[var(--surface-card)] px-2 py-2 text-[11px] font-medium text-[var(--text-muted)]">
+                {time}
+              </div>
               {memberCourts.map((c) => {
-                const active = c.id === courtId;
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => {
-                      setCourtId(c.id);
-                      setSelectedTime(null);
-                    }}
-                    className={`flex items-center gap-3 rounded-xl border p-3 text-left transition-all ${
-                      active
-                        ? "border-[var(--color-primary)] bg-[var(--color-primary-light)]"
-                        : "border-[var(--border-default)] hover:border-[var(--color-primary)]"
-                    }`}
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-muted)] text-lg">
-                      🎾
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate font-medium text-[var(--text-heading)]">{c.name}</p>
-                      <p className="truncate text-xs text-[var(--text-muted)]">
-                        {c.zone} · {c.surface} · {c.tag}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* duration + slots */}
-          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-5">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <h4 className="font-semibold text-[var(--text-heading)]">Pick a time</h4>
-              <div className="flex items-center gap-1.5">
-                {[1, 1.5, 2].map((d) => (
-                  <Button
-                    key={d}
-                    variant="chip"
-                    size="sm"
-                    active={duration === d}
-                    onClick={() => setDuration(d)}
-                  >
-                    {d}h
-                  </Button>
-                ))}
-              </div>
-            </div>
-            <div className="mb-4 flex flex-wrap gap-3 text-xs text-[var(--text-muted)]">
-              <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded border border-[var(--border-default)]" /> Available
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded bg-[var(--surface-muted)]" /> Booked
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block h-2 w-2 rounded-full bg-amber-400" /> Peak rate
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
-              {bookableHours.map((time, i) => {
-                const status = slots[i] ?? "open";
+                const status: SlotStatus = grid[c.id]?.[hi] ?? "open";
+                const peak = isPeakHour(time);
                 const disabled = status === "booked" || status === "closed";
-                const active = selectedTime === time;
+                const courtPrice = peak ? c.pricePeak : c.priceOffPeak;
                 return (
                   <button
-                    key={time}
+                    key={`${c.id}:${time}`}
+                    type="button"
                     disabled={disabled}
-                    onClick={() => setSelectedTime(time)}
-                    className={`relative rounded-lg border py-2.5 text-sm font-medium transition-all ${
-                      active
-                        ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white shadow-theme-sm"
-                        : slotTone[status]
-                    }`}
+                    onClick={() => openSlot(c.id, time)}
+                    title={
+                      disabled
+                        ? status === "booked"
+                          ? "Sudah ter-booking"
+                          : "Tutup"
+                        : `${c.name} · ${time} · ${idr(courtPrice)}/jam`
+                    }
+                    className={[
+                      "group relative h-12 border-b border-l border-[var(--border-light)] transition-colors",
+                      disabled
+                        ? "cursor-not-allowed bg-[var(--surface-muted)]"
+                        : "hover:bg-[var(--color-primary-light)]",
+                    ].join(" ")}
                   >
-                    {time}
-                    {isPeakHour(time) && !disabled && (
-                      <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-400" />
+                    {disabled ? (
+                      <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] text-[var(--text-muted)]">
+                        {status === "booked" ? "Terisi" : "—"}
+                      </span>
+                    ) : (
+                      <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--color-primary)] opacity-0 transition-opacity group-hover:opacity-100">
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                        </svg>
+                      </span>
+                    )}
+                    {peak && !disabled && (
+                      <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-400" />
                     )}
                   </button>
                 );
               })}
-            </div>
-          </div>
+            </React.Fragment>
+          ))}
         </div>
+      </div>
 
-        {/* summary rail */}
-        <div className="xl:col-span-1">
-          <div className="sticky top-24 space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-5">
-            <h4 className="font-semibold text-[var(--text-heading)]">Booking summary</h4>
-            <div className="space-y-2.5 text-sm">
-              <Row label="Court" value={court.name} />
-              <Row label="Date" value={prettyDateLong(date)} />
-              <Row
-                label="Time"
-                value={selectedTime ? `${selectedTime} – ${endTime(selectedTime)}` : "—"}
-              />
-              <Row label="Duration" value={`${duration} hour${duration > 1 ? "s" : ""}`} />
-              <Row
-                label="Rate"
-                value={
-                  selectedTime ? (
-                    <Badge variant="light" color={isPeakHour(selectedTime) ? "warning" : "success"} size="sm">
-                      {isPeakHour(selectedTime) ? "Peak" : "Off-peak"}
-                    </Badge>
-                  ) : (
-                    "—"
-                  )
-                }
-              />
+      {bookedRef && (
+        <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+          <CheckIcon className="h-4 w-4" />
+          Booking terakhir berhasil · ref {bookedRef}
+        </div>
+      )}
+
+      {/* ── Booking modal ── */}
+      <ModalDialog
+        isOpen={!!selection}
+        onClose={closeModal}
+        title={confirmStage ? "Konfirmasi booking" : "Booking lapangan"}
+        description={
+          court
+            ? `${court.name} · ${prettyDateLong(date)}`
+            : undefined
+        }
+        footer={
+          selection ? (
+            <div className="flex justify-end gap-2">
+              {confirmStage ? (
+                <>
+                  <Button variant="ghost" onClick={() => setConfirmStage(false)}>
+                    Kembali
+                  </Button>
+                  <Button onClick={handleConfirm} glow>
+                    {quotaCovers
+                      ? "Konfirmasi (gratis kuota)"
+                      : `Bayar ${idr(payable)} & konfirmasi`}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="ghost" onClick={closeModal}>
+                    Batal
+                  </Button>
+                  <Button
+                    onClick={() => setConfirmStage(true)}
+                    glow
+                    startIcon={<ClockIcon className="h-4 w-4" />}
+                  >
+                    Lanjut
+                  </Button>
+                </>
+              )}
             </div>
-            {selectedTime && (
+          ) : undefined
+        }
+      >
+        {selection && court && (
+          <div className="space-y-5">
+            {/* Slot summary */}
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-muted)] p-3">
+              <div>
+                <p className="text-sm font-semibold text-[var(--text-heading)]">
+                  {court.name}
+                </p>
+                <p className="text-xs text-[var(--text-muted)]">
+                  {selection.time} – {endTimeOf(selection.time, duration)}
+                </p>
+              </div>
+              <Badge
+                variant="light"
+                color={isPeakHour(selection.time) ? "warning" : "success"}
+                size="sm"
+              >
+                {isPeakHour(selection.time) ? "Peak" : "Off-peak"}
+              </Badge>
+            </div>
+
+            {!confirmStage && (
+              <div>
+                <span className="mb-2 block text-sm font-medium text-[var(--text-body)]">
+                  Durasi
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {[1, 1.5, 2].map((d) => (
+                    <Button
+                      key={d}
+                      variant="chip"
+                      size="sm"
+                      active={duration === d}
+                      onClick={() => setDuration(d)}
+                    >
+                      {d}h
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!confirmStage && !quotaCovers && (
               <div className="border-t border-[var(--border-light)] pt-4">
                 <PromoReferralInput
                   scope="booking"
@@ -274,80 +402,65 @@ export default function BookCourtPage() {
                 />
               </div>
             )}
-            <div className="border-t border-[var(--border-light)] pt-3">
-              {tier.courtDiscountPct > 0 && selectedTime && (
-                <div className="flex items-center justify-between text-sm text-[var(--text-caption)]">
-                  <span>Subtotal</span>
-                  <span className="line-through">{idr(gross)}</span>
-                </div>
+
+            {/* Price breakdown */}
+            <div className="space-y-1.5 border-t border-[var(--border-light)] pt-4 text-sm">
+              <Row label="Durasi" value={`${duration} jam`} />
+              {quotaCovers ? (
+                <>
+                  <div className="flex items-center justify-between text-[var(--text-caption)]">
+                    <span>Tarif lapangan</span>
+                    <span className="line-through">{idr(gross)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-emerald-500">
+                    <span>Kuota membership</span>
+                    <span>−{idr(gross)}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {tier.courtDiscountPct > 0 && (
+                    <>
+                      <div className="flex items-center justify-between text-[var(--text-caption)]">
+                        <span>Subtotal</span>
+                        <span className="line-through">{idr(gross)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-emerald-500">
+                        <span>{tier.name} ({tier.courtDiscountPct}%)</span>
+                        <span>−{idr(gross - net)}</span>
+                      </div>
+                    </>
+                  )}
+                  {appliedPromo > 0 && (
+                    <div className="flex items-center justify-between text-emerald-500">
+                      <span>Promo</span>
+                      <span>−{idr(appliedPromo)}</span>
+                    </div>
+                  )}
+                </>
               )}
-              {tier.courtDiscountPct > 0 && selectedTime && (
-                <div className="flex items-center justify-between text-sm text-emerald-500">
-                  <span>{tier.name} discount ({tier.courtDiscountPct}%)</span>
-                  <span>−{idr(gross - net)}</span>
-                </div>
-              )}
-              {appliedPromo > 0 && (
-                <div className="flex items-center justify-between text-sm text-emerald-500">
-                  <span>Promo</span>
-                  <span>−{idr(appliedPromo)}</span>
-                </div>
-              )}
-              <div className="mt-1 flex items-center justify-between">
+              <div className="flex items-center justify-between border-t border-[var(--border-light)] pt-2">
                 <span className="font-medium text-[var(--text-heading)]">Total</span>
-                <span className="text-xl font-bold text-[var(--color-primary)]">
-                  {selectedTime ? idr(payable) : "—"}
+                <span className="text-lg font-bold text-[var(--color-primary)]">
+                  {idr(payable)}
                 </span>
               </div>
+              {quotaCovers && membership && (
+                <p className="pt-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                  Gratis dari kuota · sisa {membership.quotaRemaining - 1}/{membership.quotaTotal} setelah booking ini
+                </p>
+              )}
             </div>
-            <Button
-              fullWidth
-              disabled={!selectedTime}
-              glow
-              onClick={() => setConfirmOpen(true)}
-              startIcon={<ClockIcon className="h-4 w-4" />}
-            >
-              Review &amp; confirm
-            </Button>
-            {bookedRef && (
-              <div className="flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
-                <CheckIcon className="h-4 w-4" />
-                Last booking confirmed · {bookedRef}
-              </div>
+
+            {confirmStage && (
+              <p className="text-xs text-[var(--text-muted)]">
+                {quotaCovers
+                  ? "Booking ini gratis memakai kuota membership — tidak ada potongan wallet."
+                  : "Pembayaran akan dipotong dari wallet kamu."}
+              </p>
             )}
           </div>
-        </div>
-      </div>
-
-      <ModalDialog
-        isOpen={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        title="Confirm your booking"
-        description="Payment will be drawn from your wallet."
-        footer={
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
-              Back
-            </Button>
-            <Button onClick={handleConfirm} glow>
-              Pay {idr(payable)} &amp; confirm
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-3 text-sm">
-          <Row label="Court" value={court.name} />
-          <Row label="When" value={`${prettyDateLong(date)} · ${selectedTime ?? ""}`} />
-          <Row label="Players" value="Up to 4 (invite later)" />
-          <Row label="Pay with" value="Wallet" />
-          {appliedPromo > 0 && (
-            <Row label="Promo" value={`−${idr(appliedPromo)}`} />
-          )}
-          <div className="flex items-center justify-between border-t border-[var(--border-light)] pt-3">
-            <span className="font-medium text-[var(--text-heading)]">Total</span>
-            <span className="text-lg font-bold text-[var(--color-primary)]">{idr(payable)}</span>
-          </div>
-        </div>
+        )}
       </ModalDialog>
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import InputLabel from "./InputLabel";
 
 export type Country = {
   name: string;
@@ -8,11 +9,16 @@ export type Country = {
   dial: string;
 };
 
+type TooltipPlacement = "top" | "bottom" | "left" | "right";
+
 interface PhoneInputProps {
   countries: Country[];
   value?: string;
   defaultCountry?: string; // iso2
   label?: string;
+  labelInfo?: ReactNode;
+  labelInfoPlacement?: TooltipPlacement;
+  required?: boolean;
   hint?: string;
   placeholder?: string;
   disabled?: boolean;
@@ -41,6 +47,9 @@ const PhoneInput: React.FC<PhoneInputProps> = ({
   value,
   defaultCountry = "id",
   label,
+  labelInfo,
+  labelInfoPlacement,
+  required = false,
   hint,
   placeholder = "812 3456 7890",
   disabled = false,
@@ -106,7 +115,14 @@ const PhoneInput: React.FC<PhoneInputProps> = ({
 
   return (
     <div className={`relative ${className}`} ref={ref}>
-      {label && <label className="mb-1.5 block text-sm font-medium text-[var(--text-body)]">{label}</label>}
+      {label && (
+        <InputLabel
+          label={label}
+          required={required}
+          tooltip={labelInfo}
+          tooltipPlacement={labelInfoPlacement}
+        />
+      )}
       {/* NOTE: tanpa overflow-hidden agar dropdown tidak terpotong */}
       <div
         className={[

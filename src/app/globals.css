@@ -1063,6 +1063,14 @@ span.flatpickr-weekday,
   100% { background-position: 200% 0; }
 }
 
+/* QR scan line — viewport kamera check-in member */
+@keyframes qr-scan {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(176px); }
+  100% { transform: translateY(0); }
+}
+.animate-qr-scan { animation: qr-scan 1.4s ease-in-out infinite; }
+
 /* Gradient teks — untuk angka KPI / heading spesial */
 .text-gradient-primary {
   background: linear-gradient(120deg, var(--color-primary), var(--color-accent));

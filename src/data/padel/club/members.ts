@@ -56,15 +56,15 @@ export const memberTierMeta: Record<
   { label: string; tone: "neutral" | "info" | "success" | "warning"; perk: string; color: string }
 > = {
   daily: {
-    label: "Harian",
+    label: "Daily Walk-in",
     tone: "warning",
-    perk: "Akses sekali main",
+    perk: "Booking biasa, bayar per sesi",
     color: "#F59E0B",
   },
   casual: {
     label: "Casual",
     tone: "neutral",
-    perk: "Pay-as-you-play",
+    perk: "Booking biasa, bayar per sesi",
     color: "#94A3B8",
   },
   pro: {

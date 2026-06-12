@@ -8,6 +8,7 @@ import { AccessControlProvider } from "@/context/AccessControlContext";
 import { MenuProvider } from "@/context/MenuContext";
 import { NotificationProvider } from "@/context/NotificationContext";
 import { PromoProvider } from "@/context/PromoContext";
+import { MembershipProvider } from "@/context/MembershipContext";
 import { FormBuilderProvider } from "@/context/FormBuilderContext";
 import { OnboardingProvider } from "@/context/OnboardingContext";
 import { ToastProvider } from "@/components/ui/toast/ToastContext";
@@ -36,14 +37,16 @@ export default function RootLayout({
                 <MenuProvider>
                   <NotificationProvider>
                     <PromoProvider>
-                      <FormBuilderProvider>
-                        <ToastProvider>
-                          <SidebarProvider>
-                            {children}
-                            <OnboardingPrompt />
-                          </SidebarProvider>
-                        </ToastProvider>
-                      </FormBuilderProvider>
+                      <MembershipProvider>
+                        <FormBuilderProvider>
+                          <ToastProvider>
+                            <SidebarProvider>
+                              {children}
+                              <OnboardingPrompt />
+                            </SidebarProvider>
+                          </ToastProvider>
+                        </FormBuilderProvider>
+                      </MembershipProvider>
                     </PromoProvider>
                   </NotificationProvider>
                 </MenuProvider>

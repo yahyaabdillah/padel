@@ -71,6 +71,17 @@ const iconForPath = (
   return "LayoutGrid";
 };
 
+// Override parent (group) menu icons by their label, since group parents have
+// no path and would otherwise all fall back to the generic "List" icon.
+const parentIconByName: Record<string, LucideIconName> = {
+  "Booking & Check-in": "CalendarCheck",
+  "Manage Member": "Users",
+  Coaching: "GraduationCap",
+  Finance: "Wallet",
+  Marketing: "Megaphone",
+  Master: "SlidersHorizontal",
+};
+
 // Build the flat seed list from the static navSections.
 function buildSeed(): MenuItem[] {
   const items: MenuItem[] = [];
@@ -86,7 +97,9 @@ function buildSeed(): MenuItem[] {
         id: parentId,
         label: navItem.name,
         path: navItem.path ?? "",
-        icon: iconForPath(navItem.path, hasChildren),
+        icon:
+          parentIconByName[navItem.name] ??
+          iconForPath(navItem.path, hasChildren),
         parent: null,
         section: section.title,
         group: parentGroup,

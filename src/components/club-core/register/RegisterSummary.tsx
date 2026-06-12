@@ -12,9 +12,17 @@ export interface CostBreakdown {
   courtIncluded: number;
   courtPaid: number;
   courtFeeTotal: number;
+  /** full coach fee for all sessions (no waiver) */
   ptCoachFeeTotal: number;
+  /** coach fee actually charged after free-coaching waiver */
+  ptCoachChargedTotal: number;
+  /** coach fee waived by the tier benefit */
+  ptCoachWaivedTotal: number;
   ptCourtFeeTotal: number;
-  ptCoachWaived: boolean;
+  /** free coaching sessions granted by the tier */
+  freeCoaching: number;
+  /** free coaching sessions actually consumed */
+  freeUsed: number;
   promoDiscount: number;
   grandTotal: number;
 }
@@ -116,11 +124,15 @@ const RegisterSummary: React.FC<RegisterSummaryProps> = ({
               <Row
                 label={`Coach fee × ${ptCount}`}
                 value={formatIDR(cost.ptCoachFeeTotal)}
-                muted={!cost.ptCoachWaived}
-                strike={cost.ptCoachWaived}
+                muted={cost.freeUsed === 0}
+                strike={cost.freeUsed > 0 && cost.ptCoachChargedTotal === 0}
               />
-              {cost.ptCoachWaived && (
-                <Row label="Elite coaching" value="Waived" positive />
+              {cost.freeUsed > 0 && (
+                <Row
+                  label={`Free coaching × ${cost.freeUsed}`}
+                  value={`−${formatIDR(cost.ptCoachWaivedTotal)}`}
+                  positive
+                />
               )}
               {cost.ptCourtFeeTotal > 0 && (
                 <Row

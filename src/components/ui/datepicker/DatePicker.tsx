@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import InputLabel from "@/components/ui/input/InputLabel";
 import {
   DAYS_ID,
   MONTHS_ID,
@@ -24,6 +25,8 @@ interface DatePickerProps {
   mode?: DatePickerMode;
   value?: Date | DateRange | string | null;
   label?: string;
+  labelInfo?: ReactNode;
+  labelInfoPlacement?: "top" | "bottom" | "left" | "right";
   hint?: string;
   placeholder?: string;
   disabled?: boolean;
@@ -54,6 +57,8 @@ const DatePicker: React.FC<DatePickerProps> = ({
   mode = "single",
   value,
   label,
+  labelInfo,
+  labelInfoPlacement,
   hint,
   placeholder,
   disabled = false,
@@ -172,7 +177,13 @@ const DatePicker: React.FC<DatePickerProps> = ({
 
   return (
     <div className={`${open ? "relative z-[60]" : "relative"} ${className}`} ref={ref}>
-      {label && <label className="mb-1.5 block text-sm font-medium text-[var(--text-body)]">{label}</label>}
+      {label && (
+        <InputLabel
+          label={label}
+          tooltip={labelInfo}
+          tooltipPlacement={labelInfoPlacement}
+        />
+      )}
       <div className="relative">
         <button
           type="button"
