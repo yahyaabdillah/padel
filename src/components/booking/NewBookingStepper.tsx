@@ -32,6 +32,8 @@ import PromoReferralInput from "@/components/shared/PromoReferralInput";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const todayKey = "2026-06-02";
+/** Jam "sekarang" untuk demo (selaras dengan seed booking & check-in). */
+const NOW_HOUR = 14;
 
 const durations = [
   { value: 60, label: "60 minutes" },
@@ -96,9 +98,12 @@ export default function NewBookingStepper({
   const [courtId, setCourtId] = useState(
     initialCourtId ?? activeCourts[0]?.id ?? "",
   );
-  const [date, setDate] = useState<Date>(
-    new Date(`${initialDateKey ?? todayKey}T00:00:00`),
-  );
+  const [date, setDate] = useState<Date>(() => {
+    // Never start on a past date, even if the URL passes one.
+    const requested = new Date(`${initialDateKey ?? todayKey}T00:00:00`);
+    const floor = new Date(`${todayKey}T00:00:00`);
+    return requested < floor ? floor : requested;
+  });
   const [hour, setHour] = useState<number | null>(
     initialHour !== undefined ? initialHour : null,
   );
@@ -177,10 +182,12 @@ export default function NewBookingStepper({
 
   // ── validation ──
   const courtValid = !!court;
+  // Tanggal booking tidak boleh sebelum hari ini.
+  const dateValid = selectedKey >= todayKey;
   const timeValid = hour !== null && !durationClashes;
   const customerValid =
     kind === "member" ? !!memberId : walkInName.trim().length >= 2;
-  const canSubmit = courtValid && timeValid && customerValid;
+  const canSubmit = courtValid && dateValid && timeValid && customerValid;
 
   const reset = () => {
     setHour(null);
@@ -344,6 +351,11 @@ export default function NewBookingStepper({
                       }
                     }}
                   />
+                  {!dateValid && (
+                    <p className="mt-2 text-xs text-[var(--color-error,#ef4444)]">
+                      Tidak bisa booking di tanggal yang sudah lewat.
+                    </p>
+                  )}
                 </div>
               </div>
             </FormSection>
@@ -394,10 +406,12 @@ export default function NewBookingStepper({
                     {gridHours.map((h) => {
                       const span = Math.ceil(duration / 60);
                       const wouldOverflow = h + span > 23;
+                      // Jam yang sudah lewat (untuk booking hari ini) tidak bisa dipilih.
+                      const isPast = selectedKey === todayKey && h < NOW_HOUR;
                       const clashes =
                         Array.from({ length: span }, (_, i) => h + i).some((x) =>
                           bookedHours.has(x),
-                        ) || wouldOverflow;
+                        ) || wouldOverflow || isPast;
                       const active = hour === h;
                       const peak = isPeakHour(h, isWeekend);
                       return (

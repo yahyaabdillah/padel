@@ -26,12 +26,18 @@ import { useRole } from "@/context/RoleContext";
 import { useMembership } from "@/context/MembershipContext";
 import { mockMembers } from "@/data/padel/club/members";
 import DatePicker from "@/components/ui/datepicker/DatePicker";
+import InputLabel from "@/components/ui/input/InputLabel";
+import Tooltip from "@/components/ui/tooltip/Tooltip";
 import { CheckIcon, ClockIcon } from "@/components/member/icons";
 import PromoReferralInput from "@/components/shared/PromoReferralInput";
 import type { MemberTier as ClubMemberTier } from "@/data/padel/club/members";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const toKey = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+const TODAY_KEY = "2026-06-02";
+/** Jam "sekarang" untuk demo (selaras dengan seed booking & check-in). */
+const NOW_HOUR = 14;
 
 function nextDays(count: number) {
   const out: string[] = [];
@@ -55,6 +61,17 @@ interface SlotSelection {
   time: string;
 }
 
+/** key for a slot the user booked this session: `${date}|${courtId}|${time}` */
+const slotKey = (date: string, courtId: string, time: string) =>
+  `${date}|${courtId}|${time}`;
+
+/** hourly slot labels covered by a booking that starts at `time` for `duration` hours */
+const coveredSlots = (time: string, duration: number): string[] => {
+  const startH = parseInt(time.slice(0, 2), 10);
+  const span = Math.ceil(duration); // grid is hourly
+  return Array.from({ length: span }, (_, i) => `${pad2(startH + i)}:00`);
+};
+
 export default function BookCourtPage() {
   const toast = useToast();
   const { currentUser } = useRole();
@@ -66,6 +83,8 @@ export default function BookCourtPage() {
   const [confirmStage, setConfirmStage] = useState(false);
   const [bookedRef, setBookedRef] = useState<string | null>(null);
   const [promoDiscount, setPromoDiscount] = useState(0);
+  // Slots the user has successfully booked this session (so the grid marks them).
+  const [myBookings, setMyBookings] = useState<Set<string>>(new Set());
 
   const grid = useMemo(() => buildSlotGrid(date), [date]);
   const isCustomDate = !days.includes(date);
@@ -116,6 +135,17 @@ export default function BookCourtPage() {
   const handleConfirm = () => {
     const ref = "SC-" + Math.random().toString(36).slice(2, 6).toUpperCase();
     if (quotaCovers && clubMemberId) consumeCourtQuota(clubMemberId, 1);
+    // mark every hourly slot the booking covers as "mine"
+    if (selection) {
+      const keys = coveredSlots(selection.time, duration).map((t) =>
+        slotKey(date, selection.courtId, t),
+      );
+      setMyBookings((prev) => {
+        const next = new Set(prev);
+        keys.forEach((k) => next.add(k));
+        return next;
+      });
+    }
     setBookedRef(ref);
     toast.success(
       quotaCovers
@@ -134,18 +164,25 @@ export default function BookCourtPage() {
 
       {/* ── Date switcher ── */}
       <div className="mb-5 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div>
+        <div className="mb-3">
+          <div className="flex items-center gap-1.5">
             <h4 className="font-semibold text-[var(--text-heading)]">
               {prettyDateLong(date)}
             </h4>
-            <p className="text-xs text-[var(--text-muted)]">
-              Pilih slot kosong di kalender untuk booking
-            </p>
+            <InputLabel
+              label=""
+              className="mb-0"
+              tooltip="Kalender menampilkan ketersediaan lapangan untuk tanggal ini. Ganti tanggal lewat date picker atau strip hari di bawah."
+            />
           </div>
-          <div className="w-full sm:w-56">
+          <p className="text-xs text-[var(--text-muted)]">
+            Pilih slot kosong di kalender untuk booking
+          </p>
+          <div className="mt-3 w-full sm:w-56">
             <DatePicker
               mode="single"
+              label="Pilih tanggal"
+              labelInfo="Pilih tanggal main. Tanggal yang sudah lewat tidak bisa dipilih."
               placeholder="Tanggal lain…"
               minDate={new Date(days[0] + "T00:00:00")}
               value={isCustomDate ? activeDate : null}
@@ -164,13 +201,18 @@ export default function BookCourtPage() {
                 : "border-[var(--border-default)] bg-[var(--surface-muted)]",
             ].join(" ")}
           >
-            <Badge
-              size="sm"
-              color={quotaCovers ? "success" : "neutral"}
-              variant={quotaCovers ? "solid" : "light"}
+            <Tooltip
+              content="Jumlah booking lapangan gratis dari membership kamu pada siklus ini."
+              placement="top"
             >
-              {membership.plan?.name ?? "Member"}
-            </Badge>
+              <Badge
+                size="sm"
+                color={quotaCovers ? "success" : "neutral"}
+                variant={quotaCovers ? "solid" : "light"}
+              >
+                {membership.plan?.name ?? "Member"}
+              </Badge>
+            </Tooltip>
             <span className="text-xs text-[var(--text-body)]">
               Kuota booking gratis: {membership.quotaRemaining}/{membership.quotaTotal} tersisa
             </span>
@@ -186,6 +228,16 @@ export default function BookCourtPage() {
             </span>
           </div>
         )}
+        <div className="mb-1.5 flex items-center gap-1.5">
+          <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+            Hari cepat
+          </span>
+          <InputLabel
+            label=""
+            className="mb-0"
+            tooltip="Pintasan 10 hari ke depan. Klik untuk lompat cepat ke tanggal tersebut."
+          />
+        </div>
         <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
           {days.map((d) => {
             const dt = new Date(d + "T00:00:00");
@@ -213,17 +265,32 @@ export default function BookCourtPage() {
         </div>
       </div>
 
-      {/* ── Legend ── */}
-      <div className="mb-3 flex flex-wrap gap-4 text-xs text-[var(--text-muted)]">
-        <span className="flex items-center gap-1.5">
-          <span className="h-3 w-3 rounded border border-[var(--border-default)]" /> Tersedia
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="h-3 w-3 rounded bg-[var(--surface-muted)]" /> Terisi
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-amber-400" /> Jam peak
-        </span>
+      {/* ── Calendar heading + legend ── */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5">
+          <h4 className="text-sm font-semibold text-[var(--text-heading)]">
+            Kalender ketersediaan
+          </h4>
+          <InputLabel
+            label=""
+            className="mb-0"
+            tooltip="Kolom = lapangan, baris = jam. Klik sel hijau/kosong untuk booking. Arahkan kursor ke sel untuk melihat harga per jam."
+          />
+        </div>
+        <div className="flex flex-wrap gap-4 text-xs text-[var(--text-muted)]">
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-3 rounded border border-[var(--border-default)]" /> Tersedia
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-3 rounded bg-[var(--surface-muted)]" /> Terisi
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-3 rounded border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-500/15" /> Booking saya
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-amber-400" /> Jam peak
+          </span>
+        </div>
       </div>
 
       {/* ── Calendar grid ── */}
@@ -257,7 +324,10 @@ export default function BookCourtPage() {
               {memberCourts.map((c) => {
                 const status: SlotStatus = grid[c.id]?.[hi] ?? "open";
                 const peak = isPeakHour(time);
-                const disabled = status === "booked" || status === "closed";
+                const hourNum = parseInt(time.slice(0, 2), 10);
+                const isPast = date === TODAY_KEY && hourNum < NOW_HOUR;
+                const isMine = myBookings.has(slotKey(date, c.id, time));
+                const disabled = isMine || status === "booked" || status === "closed" || isPast;
                 const courtPrice = peak ? c.pricePeak : c.priceOffPeak;
                 return (
                   <button
@@ -266,22 +336,33 @@ export default function BookCourtPage() {
                     disabled={disabled}
                     onClick={() => openSlot(c.id, time)}
                     title={
-                      disabled
-                        ? status === "booked"
-                          ? "Sudah ter-booking"
-                          : "Tutup"
-                        : `${c.name} · ${time} · ${idr(courtPrice)}/jam`
+                      isMine
+                        ? "Kamu sudah booking slot ini"
+                        : disabled
+                          ? isPast
+                            ? "Jam sudah lewat"
+                            : status === "booked"
+                              ? "Sudah ter-booking"
+                              : "Tutup"
+                          : `${c.name} · ${time} · ${idr(courtPrice)}/jam`
                     }
                     className={[
-                      "group relative h-12 border-b border-l border-[var(--border-light)] transition-colors",
-                      disabled
-                        ? "cursor-not-allowed bg-[var(--surface-muted)]"
-                        : "hover:bg-[var(--color-primary-light)]",
+                      "group relative h-12 border-b border-l transition-colors",
+                      isMine
+                        ? "border-l-emerald-500 border-b-[var(--border-light)] bg-emerald-50 dark:bg-emerald-500/15"
+                        : disabled
+                          ? "cursor-not-allowed border-[var(--border-light)] bg-[var(--surface-muted)]"
+                          : "border-[var(--border-light)] hover:bg-[var(--color-primary-light)]",
                     ].join(" ")}
                   >
-                    {disabled ? (
+                    {isMine ? (
+                      <span className="pointer-events-none absolute inset-0 flex items-center justify-center gap-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                        <CheckIcon className="h-3 w-3" />
+                        Booking saya
+                      </span>
+                    ) : disabled ? (
                       <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] text-[var(--text-muted)]">
-                        {status === "booked" ? "Terisi" : "—"}
+                        {isPast ? "—" : status === "booked" ? "Terisi" : "—"}
                       </span>
                     ) : (
                       <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--color-primary)] opacity-0 transition-opacity group-hover:opacity-100">
@@ -373,9 +454,10 @@ export default function BookCourtPage() {
 
             {!confirmStage && (
               <div>
-                <span className="mb-2 block text-sm font-medium text-[var(--text-body)]">
-                  Durasi
-                </span>
+                <InputLabel
+                  label="Durasi"
+                  tooltip="Lama sewa lapangan. Memengaruhi total harga dan jumlah jam yang dipakai di kalender."
+                />
                 <div className="flex items-center gap-1.5">
                   {[1, 1.5, 2].map((d) => (
                     <Button
@@ -394,6 +476,10 @@ export default function BookCourtPage() {
 
             {!confirmStage && !quotaCovers && (
               <div className="border-t border-[var(--border-light)] pt-4">
+                <InputLabel
+                  label="Kode promo / referral"
+                  tooltip="Punya kode promo atau referral? Masukkan di sini untuk memotong harga sebelum bayar."
+                />
                 <PromoReferralInput
                   scope="booking"
                   amount={net}
