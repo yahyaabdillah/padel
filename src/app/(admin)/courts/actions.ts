@@ -1,0 +1,162 @@
+"use server";
+
+import { cookies } from "next/headers";
+import { getTenantDb } from "@/lib/tenant-db";
+import { SESSION_COOKIE_NAME } from "@/lib/env";
+import type { AuthSession } from "@/lib/auth-types";
+import { revalidatePath } from "next/cache";
+import type { Prisma } from "@prisma/tenant-client";
+
+export type Court = {
+  id: string;
+  name: string;
+  environment: string;
+  wall: string;
+  format: string;
+  status: string;
+  priceOffPeak: number;
+  pricePeak: number;
+  schedule: unknown;
+  color: string;
+  note?: string | null;
+  image?: string | null;
+};
+
+export async function getCourtsAction(): Promise<Court[]> {
+  const cookieStore = await cookies();
+  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!raw) return [];
+
+  const session: AuthSession = JSON.parse(raw);
+  const db = await getTenantDb();
+
+  const rows = await db.m_court.findMany({
+    where: { companyId: session.companyId, isdeleted: 0 },
+    orderBy: { created: "asc" },
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    environment: r.environment,
+    wall: r.wall,
+    format: r.format,
+    status: r.status,
+    priceOffPeak: r.priceOffPeak,
+    pricePeak: r.pricePeak,
+    schedule: r.schedule,
+    color: r.color,
+    note: r.note,
+    image: r.image,
+  }));
+}
+
+export async function getCourtByIdAction(id: string): Promise<Court | null> {
+  const cookieStore = await cookies();
+  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!raw) return null;
+
+  const session: AuthSession = JSON.parse(raw);
+  const db = await getTenantDb();
+
+  const row = await db.m_court.findFirst({
+    where: { id, companyId: session.companyId, isdeleted: 0 },
+  });
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    name: row.name,
+    environment: row.environment,
+    wall: row.wall,
+    format: row.format,
+    status: row.status,
+    priceOffPeak: row.priceOffPeak,
+    pricePeak: row.pricePeak,
+    schedule: row.schedule,
+    color: row.color,
+    note: row.note,
+    image: row.image,
+  };
+}
+
+export async function createCourtAction(
+  data: Omit<Court, "id">,
+): Promise<{ success: boolean; id?: string }> {
+  const cookieStore = await cookies();
+  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!raw) return { success: false };
+
+  const session: AuthSession = JSON.parse(raw);
+  const db = await getTenantDb();
+
+  const created = await db.m_court.create({
+    data: {
+      companyId: session.companyId,
+      name: data.name,
+      environment: data.environment,
+      wall: data.wall,
+      format: data.format,
+      status: data.status,
+      priceOffPeak: data.priceOffPeak,
+      pricePeak: data.pricePeak,
+      schedule: data.schedule as Prisma.InputJsonValue,
+      color: data.color,
+      note: data.note,
+      image: data.image,
+    },
+  });
+
+  revalidatePath("/courts");
+  return { success: true, id: created.id };
+}
+
+export async function updateCourtAction(
+  id: string,
+  data: Partial<Omit<Court, "id">>,
+): Promise<{ success: boolean }> {
+  const cookieStore = await cookies();
+  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!raw) return { success: false };
+
+  const session: AuthSession = JSON.parse(raw);
+  const db = await getTenantDb();
+
+  await db.m_court.updateMany({
+    where: { id, companyId: session.companyId, isdeleted: 0 },
+    data: {
+      ...(data.name !== undefined && { name: data.name }),
+      ...(data.environment !== undefined && { environment: data.environment }),
+      ...(data.wall !== undefined && { wall: data.wall }),
+      ...(data.format !== undefined && { format: data.format }),
+      ...(data.status !== undefined && { status: data.status }),
+      ...(data.priceOffPeak !== undefined && { priceOffPeak: data.priceOffPeak }),
+      ...(data.pricePeak !== undefined && { pricePeak: data.pricePeak }),
+      ...(data.schedule !== undefined && { schedule: data.schedule as Prisma.InputJsonValue }),
+      ...(data.color !== undefined && { color: data.color }),
+      ...(data.note !== undefined && { note: data.note }),
+      ...(data.image !== undefined && { image: data.image }),
+    },
+  });
+
+  revalidatePath("/courts");
+  return { success: true };
+}
+
+export async function deleteCourtAction(id: string): Promise<{ success: boolean }> {
+  const cookieStore = await cookies();
+  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!raw) return { success: false };
+
+  const session: AuthSession = JSON.parse(raw);
+  const db = await getTenantDb();
+
+  await db.m_court.updateMany({
+    where: { id, companyId: session.companyId, isdeleted: 0 },
+    data: { isdeleted: 1 },
+  });
+
+  revalidatePath("/courts");
+  return { success: true };
+}

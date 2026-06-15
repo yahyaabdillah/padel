@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import DataTable, { type Column } from "@/components/ui/table/DataTable";
 import { Avatar } from "@/components/ui/avatar/Avatar";
@@ -9,6 +9,7 @@ import StatCard from "@/components/club-core/StatCard";
 import ToneBadge from "@/components/club-core/ToneBadge";
 import MemberDetailDrawer from "@/components/club-core/MemberDetailDrawer";
 import { formatIDR } from "@/components/club-core/format";
+import { getMembersAction } from "@/app/(admin)/members/actions";
 import {
   mockMembers,
   type Member,
@@ -29,10 +30,50 @@ export default function MembersPage() {
   const [tier, setTier] = useState<MemberTier | "all">("all");
   const [selected, setSelected] = useState<Member | null>(null);
   const [open, setOpen] = useState(false);
+  const [dbMembers, setDbMembers] = useState<Member[]>([]);
+
+  // Fetch DB-registered members and map them onto the Member shape. Fields that
+  // belong to deferred features (wallet, rating, matches…) default to 0/empty.
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await getMembersAction();
+        const mapped: Member[] = rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          phone: r.phone,
+          avatar: r.avatar || "/images/user/user-01.jpg",
+          tier: (r.tier as MemberTier) || "daily",
+          status: (r.status as Member["status"]) || "active",
+          walletBalance: 0,
+          rating: 1000,
+          position: "both",
+          joinedAt: r.createdAt.slice(0, 10),
+          lastVisit: r.createdAt.slice(0, 10),
+          totalBookings: 0,
+          totalSpend: 0,
+          matchesPlayed: 0,
+          wins: 0,
+          city: r.city || "",
+          history: [],
+          onboarded: r.onboarded,
+          coachingInterest: r.coachingInterest,
+          isDaily: r.isDaily,
+        }));
+        setDbMembers(mapped);
+      } catch {
+        /* keep mock-only view on failure */
+      }
+    })();
+  }, []);
+
+  // DB members first (newest registrations on top), then the mock roster.
+  const allMembers = useMemo(() => [...dbMembers, ...mockMembers], [dbMembers]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return mockMembers.filter((m) => {
+    return allMembers.filter((m) => {
       if (tier !== "all" && m.tier !== tier) return false;
       if (!q) return true;
       return (
@@ -42,14 +83,14 @@ export default function MembersPage() {
         m.city.toLowerCase().includes(q)
       );
     });
-  }, [query, tier]);
+  }, [query, tier, allMembers]);
 
   const totals = useMemo(() => {
-    const active = mockMembers.filter((m) => m.status === "active").length;
-    const wallet = mockMembers.reduce((s, m) => s + m.walletBalance, 0);
-    const elite = mockMembers.filter((m) => m.tier === "elite").length;
-    return { total: mockMembers.length, active, wallet, elite };
-  }, []);
+    const active = allMembers.filter((m) => m.status === "active").length;
+    const wallet = allMembers.reduce((s, m) => s + m.walletBalance, 0);
+    const elite = allMembers.filter((m) => m.tier === "elite").length;
+    return { total: allMembers.length, active, wallet, elite };
+  }, [allMembers]);
 
   const openDrawer = (m: Member) => {
     setSelected(m);

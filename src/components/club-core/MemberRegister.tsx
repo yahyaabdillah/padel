@@ -16,6 +16,7 @@ import React, { ReactNode, useMemo, useState } from "react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import Card from "@/components/ui/card/Card";
 import Button from "@/components/ui/button/Button";
+import Switch from "@/components/ui/switch/Switch";
 import TextInput from "@/components/ui/input/TextInput";
 import PhoneInput, { type Country } from "@/components/ui/input/PhoneInput";
 import InputLabel from "@/components/ui/input/InputLabel";
@@ -23,6 +24,7 @@ import Badge from "@/components/ui/badge/Badge";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { useClubData } from "@/components/club-core/ClubDataContext";
+import { registerMemberAction, type BookingDraftInput } from "@/app/(admin)/members/actions";
 import { formatIDR } from "@/components/club-core/format";
 import countriesData from "@/data/countries.json";
 import {
@@ -36,7 +38,7 @@ import {
   ptPackageById,
 } from "@/data/padel/club/pt";
 import { coachById } from "@/data/padel/engage/coaches";
-import PromoReferralInput from "@/components/shared/PromoReferralInput";
+// import PromoReferralInput from "@/components/shared/PromoReferralInput"; // promo disembunyikan sementara
 import CourtBookingStep from "./register/CourtBookingStep";
 import PtSessionStep from "./register/PtSessionStep";
 import RegisterSummary, {
@@ -54,6 +56,11 @@ import {
 } from "./register/types";
 
 const countries = countriesData as Country[];
+
+// Membership tiers & coaching/PT are NOT implemented yet — hidden this session.
+// Registration is free; money is only charged when a court is booked.
+const MEMBERSHIP_ENABLED = false;
+const COACHING_ENABLED = false;
 
 const coachRate = (coachId: string): number =>
   coachById(coachId)?.ratePerHour ?? 0;
@@ -101,6 +108,11 @@ export default function MemberRegister() {
   const toast = useToast();
   const { courts, bookings, addBooking, isReady } = useClubData();
 
+  // Resolve a court from the LIVE store (DB) first, falling back to mock data
+  // so format/partySize lookups work whether ids are UUID (DB) or mock slugs.
+  const findCourt = (id: string) =>
+    courts.find((c) => c.id === id) ?? courtById(id);
+
   // ── identity + tier ──
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -109,6 +121,7 @@ export default function MemberRegister() {
 
   // ── per-section assemblies ──
   const [promoDiscount, setPromoDiscount] = useState(0);
+  const [courtEnabled, setCourtEnabled] = useState(false);
   const [courtDrafts, setCourtDrafts] = useState<DraftBooking[]>([]);
   const [ptEnabled, setPtEnabled] = useState(false);
   const [coachingMode, setCoachingMode] = useState<CoachingMode>("package");
@@ -119,9 +132,11 @@ export default function MemberRegister() {
   const [done, setDone] = useState<null | { memberNo: string; password: string }>(null);
 
   // daily walk-in: books & pays like a normal customer, no free quota
-  const isDaily = tier === "daily";
-  const quota = tierQuota[tier];
-  const freeCoaching = tierFreeCoaching[tier];
+  const isDaily = MEMBERSHIP_ENABLED ? tier === "daily" : false;
+  // Membership deferred → no included-court quota, no free coaching: every
+  // court booking is charged at the court's rate (registration itself is free).
+  const quota = MEMBERSHIP_ENABLED ? tierQuota[tier] : 0;
+  const freeCoaching = MEMBERSHIP_ENABLED ? tierFreeCoaching[tier] : 0;
 
   // Package mode fixes the per-session coach fee; casual uses the coach's rate.
   const pkg = ptPackageById(packageId) ?? ptPackages[0];
@@ -221,7 +236,7 @@ export default function MemberRegister() {
   const canSubmit = identityValid && courtValid && ptValid;
 
   // ── persistence ──
-  const finalize = () => {
+  const finalize = async () => {
     setSubmitted(true);
     if (!canSubmit) {
       toast.error(
@@ -233,12 +248,92 @@ export default function MemberRegister() {
 
     const customerLabel = isDaily ? `Walk-in · ${name.trim()}` : name.trim();
 
-    // court bookings
+    // Assemble court bookings to persist (paid at booking — quota deferred).
+    const draftBookings: BookingDraftInput[] = [];
+
     courtDrafts.forEach((d) => {
-      const court = courtById(d.courtId);
-      const startIso = `${d.dateKey}T${pad(d.hour)}:00:00`;
-      const endH = d.hour + Math.floor(d.duration / 60);
-      const endM = d.duration % 60;
+      const court = findCourt(d.courtId);
+      const startMin = d.minute ?? 0;
+      const startIso = `${d.dateKey}T${pad(d.hour)}:${pad(startMin)}:00`;
+      const totalEndMin = d.hour * 60 + startMin + d.duration;
+      const endH = Math.floor(totalEndMin / 60);
+      const endM = totalEndMin % 60;
+      const endIso = `${d.dateKey}T${pad(endH)}:${pad(endM)}:00`;
+      const idx = courtDrafts.indexOf(d);
+      const charged = idx < quota ? 0 : d.price;
+      draftBookings.push({
+        courtId: d.courtId,
+        start: startIso,
+        end: endIso,
+        type: isDaily ? "walk_in" : "member",
+        status: "confirmed",
+        customer: customerLabel,
+        partySize: court?.format === "single" ? 2 : 4,
+        price: charged,
+        note: idx < quota ? "Included in membership" : undefined,
+        createdBy: "Registration desk",
+      });
+    });
+
+    // PT / coaching bookings — only assembled when coaching is enabled (deferred).
+    if (COACHING_ENABLED && ptEnabled) {
+      const quotaAfterCourts = Math.max(quota - courtDrafts.length, 0);
+      let ptCourtUsed = 0;
+      ptSessions
+        .filter((s) => s.courtMode === "include" && s.courtId)
+        .forEach((s) => {
+          const court = courtById(s.courtId!);
+          const hour = Number(s.time.slice(0, 2));
+          const startIso = `${s.dateKey}T${pad(hour)}:00:00`;
+          const endIso = `${s.dateKey}T${pad(hour + 1)}:00:00`;
+          const coach = coachById(s.coachId);
+          const courtIncludedHere = ptCourtUsed < quotaAfterCourts;
+          ptCourtUsed++;
+          const courtCharge = courtIncludedHere ? 0 : COURT_FEE_PER_SESSION;
+          const sessionIndex = ptSessions.indexOf(s);
+          const coachIsFree = sessionIndex < freeCoaching;
+          const coachCharge = coachIsFree ? 0 : coachFeeFor(s.coachId);
+          draftBookings.push({
+            courtId: s.courtId!,
+            start: startIso,
+            end: endIso,
+            type: "coaching",
+            status: "confirmed",
+            customer: customerLabel,
+            partySize: court?.format === "single" ? 2 : 4,
+            price: coachCharge + courtCharge,
+            note: courtIncludedHere
+              ? `PT w/ ${coach?.name ?? "coach"} · court included`
+              : `PT w/ ${coach?.name ?? "coach"}`,
+            createdBy: "Registration desk",
+          });
+        });
+    }
+
+    const res = await registerMemberAction({
+      name: name.trim(),
+      phone,
+      email: email.trim() || undefined,
+      // Membership tier is deferred — register everyone as a plain "daily" member.
+      tier: MEMBERSHIP_ENABLED ? tier : "daily",
+      isDaily: MEMBERSHIP_ENABLED ? isDaily : true,
+      coachingInterest: COACHING_ENABLED ? ptEnabled : false,
+      bookings: draftBookings,
+    });
+
+    if (!res.success || !res.memberNo) {
+      toast.error(res.error || "Gagal menyimpan member.", "Registrasi gagal");
+      return;
+    }
+
+    // mirror new booking(s) into the in-memory club store so the calendar updates
+    courtDrafts.forEach((d) => {
+      const court = findCourt(d.courtId);
+      const startMin = d.minute ?? 0;
+      const startIso = `${d.dateKey}T${pad(d.hour)}:${pad(startMin)}:00`;
+      const totalEndMin = d.hour * 60 + startMin + d.duration;
+      const endH = Math.floor(totalEndMin / 60);
+      const endM = totalEndMin % 60;
       const endIso = `${d.dateKey}T${pad(endH)}:${pad(endM)}:00`;
       const idx = courtDrafts.indexOf(d);
       const charged = idx < quota ? 0 : d.price;
@@ -256,74 +351,7 @@ export default function MemberRegister() {
       });
     });
 
-    // PT sessions — only "include" (new court) creates a booking; "existing"
-    // reuses the court already persisted, "exclude" has no court. The first
-    // `freeCoaching` sessions (across all sessions, in order) have the coach
-    // fee waived.
-    if (ptEnabled) {
-      const quotaAfterCourts = Math.max(quota - courtDrafts.length, 0);
-      let ptCourtUsed = 0;
-      ptSessions
-        .filter((s) => s.courtMode === "include" && s.courtId)
-        .forEach((s) => {
-          const court = courtById(s.courtId!);
-          const hour = Number(s.time.slice(0, 2));
-          const startIso = `${s.dateKey}T${pad(hour)}:00:00`;
-          const endIso = `${s.dateKey}T${pad(hour + 1)}:00:00`;
-          const coach = coachById(s.coachId);
-          const courtIncludedHere = ptCourtUsed < quotaAfterCourts;
-          ptCourtUsed++;
-          const courtCharge = courtIncludedHere ? 0 : COURT_FEE_PER_SESSION;
-          // free-coaching applies by overall session order
-          const sessionIndex = ptSessions.indexOf(s);
-          const coachIsFree = sessionIndex < freeCoaching;
-          const coachCharge = coachIsFree ? 0 : coachFeeFor(s.coachId);
-          addBooking({
-            courtId: s.courtId!,
-            start: startIso,
-            end: endIso,
-            type: "coaching",
-            status: "confirmed",
-            customer: customerLabel,
-            partySize: court?.format === "single" ? 2 : 4,
-            price: coachCharge + courtCharge,
-            note: courtIncludedHere
-              ? `PT w/ ${coach?.name ?? "coach"} · court included`
-              : `PT w/ ${coach?.name ?? "coach"}`,
-            createdBy: "Registration desk",
-          });
-        });
-    }
-
-    const memberNo = isDaily
-      ? `PHB-DAY-${String(100 + Math.floor(Math.random() * 899))}`
-      : `PHB-2026-${String(1000 + Math.floor(Math.random() * 8999))}`;
-    const password = Math.random().toString(36).slice(2, 8).toUpperCase();
-    try {
-      const KEY = "padelhub-registered-members";
-      const prev = JSON.parse(window.localStorage.getItem(KEY) || "[]");
-      prev.push({
-        memberNo,
-        name: name.trim(),
-        phone,
-        email: email.trim(),
-        tier,
-        coachingInterest: ptEnabled,
-        coachingMode: ptEnabled ? coachingMode : undefined,
-        coachingPackage: ptEnabled && isPackage ? packageId : undefined,
-        isDaily,
-        courtBookings: courtDrafts.length,
-        ptSessions: ptEnabled ? ptSessions.length : 0,
-        totalPaid: cost.grandTotal,
-        onboarded: false,
-        createdAt: new Date().toISOString(),
-      });
-      window.localStorage.setItem(KEY, JSON.stringify(prev));
-    } catch {
-      /* ignore */
-    }
-
-    setDone({ memberNo, password });
+    setDone({ memberNo: res.memberNo, password: res.tempPassword || "" });
     toast.success(
       `${name.trim()} terdaftar${isDaily ? " sebagai walk-in harian" : ""}.`,
       "Registrasi berhasil",
@@ -336,6 +364,7 @@ export default function MemberRegister() {
     setEmail("");
     setTier("pro");
     setPromoDiscount(0);
+    setCourtEnabled(false);
     setCourtDrafts([]);
     setPtEnabled(false);
     setCoachingMode("package");
@@ -416,7 +445,8 @@ export default function MemberRegister() {
                 </div>
               </FormSection>
 
-              {/* Membership */}
+              {/* Membership — DEFERRED: tier economics not implemented yet. */}
+              {MEMBERSHIP_ENABLED && (
               <FormSection
                 step={++sectionNo}
                 title="Membership"
@@ -485,10 +515,11 @@ export default function MemberRegister() {
                   </div>
 
                   <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-4">
-                    <div className="mb-3 flex items-center gap-1.5">
-                      <p className="text-xs font-medium text-[var(--text-caption)]">
-                        Join fee {formatIDR(cost.joinFee)}
-                      </p>
+                    <p className="text-xs font-medium text-[var(--text-caption)]">
+                      Join fee {formatIDR(cost.joinFee)}
+                    </p>
+                    {/* Kode promo / referral disembunyikan sementara.
+                    <div className="mb-3 mt-1 flex items-center gap-1.5">
                       <InputLabel
                         label=""
                         className="mb-0"
@@ -501,9 +532,11 @@ export default function MemberRegister() {
                       tier={tier}
                       onChange={(s) => setPromoDiscount(s.discount)}
                     />
+                    */}
                   </div>
                 </div>
               </FormSection>
+              )}
 
               {/* Court booking */}
               <FormSection
@@ -512,34 +545,60 @@ export default function MemberRegister() {
                 description={
                   isDaily
                     ? "Walk-in wajib memilih 1 slot court hari ini"
-                    : "Opsional — booking court untuk member baru"
+                    : "Opsional — aktifkan untuk booking court saat registrasi"
                 }
                 info={
                   isDaily
                     ? "Member harian harus memesan tepat 1 slot court untuk hari ini."
-                    : "Tambahkan booking court. Slot dalam kuota tier dihitung gratis, sisanya dikenakan tarif."
+                    : "Aktifkan jika member ingin langsung booking court. Slot dalam kuota tier dihitung gratis, sisanya dikenakan tarif."
                 }
               >
-                <CourtBookingStep
-                  tier={tier}
-                  courts={courts}
-                  bookings={bookings}
-                  drafts={courtDrafts}
-                  onAdd={(b) =>
-                    setCourtDrafts((prev) => [...prev, { ...b, id: nextId("cb") }])
-                  }
-                  onRemove={(id) =>
-                    setCourtDrafts((prev) => prev.filter((d) => d.id !== id))
-                  }
-                />
-                {submitted && !courtValid && (
-                  <p className="mt-3 text-xs text-[var(--color-error,#ef4444)]">
-                    Member harian wajib memilih tepat 1 slot court hari ini.
-                  </p>
+                {/* Toggle (hidden for daily — always required) */}
+                {!isDaily && (
+                  <div className="mb-5 flex items-center justify-between rounded-xl border border-[var(--border-default)] bg-[var(--surface-muted)] px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-[var(--text-heading)]">
+                        Booking court sekarang?
+                      </p>
+                      <p className="text-xs text-[var(--text-caption)]">
+                        Aktifkan untuk menambahkan booking court ke registrasi ini.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={courtEnabled}
+                      onChange={(v) => {
+                        setCourtEnabled(v);
+                        if (!v) setCourtDrafts([]);
+                      }}
+                    />
+                  </div>
+                )}
+
+                {(isDaily || courtEnabled) && (
+                  <>
+                    <CourtBookingStep
+                      tier={tier}
+                      courts={courts}
+                      bookings={bookings}
+                      drafts={courtDrafts}
+                      onAdd={(b) =>
+                        setCourtDrafts((prev) => [...prev, { ...b, id: nextId("cb") }])
+                      }
+                      onRemove={(id) =>
+                        setCourtDrafts((prev) => prev.filter((d) => d.id !== id))
+                      }
+                    />
+                    {submitted && !courtValid && (
+                      <p className="mt-3 text-xs text-[var(--color-error,#ef4444)]">
+                        Member harian wajib memilih tepat 1 slot court hari ini.
+                      </p>
+                    )}
+                  </>
                 )}
               </FormSection>
 
-              {/* Pelatih / PT — tersedia untuk semua tier (daily tetap bayar) */}
+              {/* Pelatih / PT — DEFERRED: coaching not implemented yet. */}
+              {COACHING_ENABLED && (
               <FormSection
                 step={++sectionNo}
                 title="Pelatih (Personal Training)"
@@ -582,6 +641,7 @@ export default function MemberRegister() {
                   </p>
                 )}
               </FormSection>
+              )}
 
               {/* Ringkasan */}
               <FormSection

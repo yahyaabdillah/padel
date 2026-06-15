@@ -2,7 +2,7 @@
 
 // PadelHub — club operating hours (master). Single source of truth for when the
 // club is open each weekday. Court schedules grey out / lock any hour outside
-// the day's operating window. Persisted to localStorage (dummy, no DB).
+// the day's operating window. Persisted to tenant DB (m_operating_hours).
 
 import React, {
   createContext,
@@ -12,6 +12,12 @@ import React, {
   useMemo,
   useState,
 } from "react";
+import {
+  getOperatingHoursAction,
+  updateOperatingHourAction,
+  setAllOperatingHoursAction,
+  type OperatingHour,
+} from "@/app/(admin)/settings/hours/actions";
 
 /** Operating window for one weekday (0 = Sunday … 6 = Saturday). */
 export interface DayOperatingHours {
@@ -23,9 +29,6 @@ export interface DayOperatingHours {
   /** close hour (1–24, exclusive) */
   openEnd: number;
 }
-
-const STORAGE_KEY = "padelhub.club.operating-hours.v1";
-const STORAGE_KEY_SLOT = "padelhub.club.slot-minutes.v1";
 
 /** Default: open every day 07:00–23:00 (weekends start earlier). */
 export const defaultOperatingHours: DayOperatingHours[] = [
@@ -40,8 +43,8 @@ export const defaultOperatingHours: DayOperatingHours[] = [
 
 type OperatingHoursContextType = {
   hours: DayOperatingHours[];
-  /** booking/editing step in minutes (30 or 60) */
-  slotMinutes: 30 | 60;
+  /** booking slot fixed at 60 minutes */
+  slotMinutes: 60;
   isReady: boolean;
   /** the operating window for a given weekday */
   getDay: (day: number) => DayOperatingHours;
@@ -49,7 +52,7 @@ type OperatingHoursContextType = {
   updateDay: (day: number, patch: Partial<Omit<DayOperatingHours, "day">>) => void;
   /** replace the whole week */
   setAll: (next: DayOperatingHours[]) => void;
-  /** set the booking/editing slot step */
+  /** no-op for backward compat (slot fixed 60) */
   setSlotMinutes: (m: 30 | 60) => void;
   reset: () => void;
 };
@@ -73,35 +76,20 @@ export const OperatingHoursProvider: React.FC<{ children: React.ReactNode }> = (
   children,
 }) => {
   const [hours, setHours] = useState<DayOperatingHours[]>(cloneDefaults);
-  const [slotMinutes, setSlotMinutesState] = useState<30 | 60>(60);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as DayOperatingHours[];
-        if (Array.isArray(parsed) && parsed.length === 7) setHours(parsed);
+    (async () => {
+      try {
+        const fetched = await getOperatingHoursAction();
+        if (fetched.length === 7) {
+          setHours(fetched);
+        }
+      } catch {
+        /* fallback to defaults */
       }
-      const rawSlot = window.localStorage.getItem(STORAGE_KEY_SLOT);
-      if (rawSlot === "30" || rawSlot === "60") {
-        setSlotMinutesState(Number(rawSlot) as 30 | 60);
-      }
-    } catch {
-      /* ignore */
-    }
-    setIsReady(true);
-  }, []);
-
-  const persist = useCallback((next: DayOperatingHours[]) => {
-    if (typeof window !== "undefined")
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }, []);
-
-  const setSlotMinutes = useCallback((m: 30 | 60) => {
-    setSlotMinutesState(m);
-    if (typeof window !== "undefined")
-      window.localStorage.setItem(STORAGE_KEY_SLOT, String(m));
+      setIsReady(true);
+    })();
   }, []);
 
   const getDay = useCallback(
@@ -119,30 +107,41 @@ export const OperatingHoursProvider: React.FC<{ children: React.ReactNode }> = (
     (day: number, patch: Partial<Omit<DayOperatingHours, "day">>) => {
       setHours((prev) => {
         const next = prev.map((h) => (h.day === day ? { ...h, ...patch } : h));
-        persist(next);
+        // persist async
+        updateOperatingHourAction(day, patch).catch(console.error);
         return next;
       });
     },
-    [persist],
+    [],
   );
 
-  const setAll = useCallback(
-    (next: DayOperatingHours[]) => {
-      setHours(next);
-      persist(next);
-    },
-    [persist],
-  );
+  const setAll = useCallback((next: DayOperatingHours[]) => {
+    setHours(next);
+    setAllOperatingHoursAction(next).catch(console.error);
+  }, []);
 
   const reset = useCallback(() => {
     const next = cloneDefaults();
     setHours(next);
-    persist(next);
-  }, [persist]);
+    setAllOperatingHoursAction(next).catch(console.error);
+  }, []);
+
+  const setSlotMinutes = useCallback(() => {
+    // no-op — slot fixed 60
+  }, []);
 
   const value = useMemo<OperatingHoursContextType>(
-    () => ({ hours, slotMinutes, isReady, getDay, updateDay, setAll, setSlotMinutes, reset }),
-    [hours, slotMinutes, isReady, getDay, updateDay, setAll, setSlotMinutes, reset],
+    () => ({
+      hours,
+      slotMinutes: 60,
+      isReady,
+      getDay,
+      updateDay,
+      setAll,
+      setSlotMinutes,
+      reset,
+    }),
+    [hours, isReady, getDay, updateDay, setAll, reset, setSlotMinutes],
   );
 
   return (

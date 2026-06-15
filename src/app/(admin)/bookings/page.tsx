@@ -63,8 +63,8 @@ function BookingsInner() {
     [bookings, courts],
   );
 
-  // Create flow -> dedicated Stepper page (UI rule: MANY inputs = Stepper page).
-  const openCreate = () => router.push("/bookings/new");
+  // Create flow -> dedicated New Booking search page.
+  const openCreate = () => router.push("/bookings/search");
 
   const handleSlotClick = (court: Court, hour: number) => {
     router.push(`/bookings/new?court=${court.id}&date=${gridDate}&hour=${hour}`);

@@ -48,7 +48,7 @@ function HourSelect({
 
 export default function OperatingHoursMasterPage() {
   const toast = useToast();
-  const { hours, isReady, updateDay, setAll, reset, slotMinutes, setSlotMinutes } =
+  const { hours, isReady, updateDay, setAll, reset } =
     useOperatingHours();
 
   // ordered Mon → Sun
@@ -111,38 +111,6 @@ export default function OperatingHoursMasterPage() {
           </Button>
         </div>
       </div>
-
-      {/* slot interval */}
-      <Card padding="md" className="mb-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-start gap-2">
-            <InputLabel
-              label="Durasi Slot Booking"
-              tooltip="Kelipatan waktu booking. 30 menit memungkinkan sewa 1,5 jam; 60 menit hanya kelipatan 1 jam. Jadwal lapangan tetap tersimpan per 30 menit."
-            />
-          </div>
-          <div className="inline-flex rounded-lg bg-[var(--surface-muted)] p-0.5">
-            {([30, 60] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => {
-                  setSlotMinutes(m);
-                  toast.info(`Durasi slot booking diset ${m} menit.`);
-                }}
-                className={[
-                  "rounded-md px-4 py-1.5 text-sm font-medium transition-all",
-                  slotMinutes === m
-                    ? "bg-[var(--surface-card)] text-[var(--color-primary)] shadow-theme-xs"
-                    : "text-[var(--text-caption)] hover:text-[var(--text-heading)]",
-                ].join(" ")}
-              >
-                {m} menit
-              </button>
-            ))}
-          </div>
-        </div>
-      </Card>
 
       <Card padding="none">
         <div className="divide-y divide-[var(--border-light)]">

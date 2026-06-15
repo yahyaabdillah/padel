@@ -1,0 +1,87 @@
+// PadelHub — MASTER (engine) database schema
+// Shared across the platform: roles, permissions, menu/RBAC, version, tenants registry.
+// Tenant business data (users, bookings, members, ...) lives in per-tenant databases.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/@prisma/master-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("MASTER_DATABASE_URL")
+}
+
+/// A role definition shared by all tenants (superadmin, owner, staff, coach, member).
+model m_role {
+  id          String              @id @default(uuid()) @db.Uuid
+  key         String              @unique @db.VarChar(50) // lowercase canonical: superadmin|owner|staff|coach|member
+  name        String              @db.VarChar(100) // display label
+  description String?
+  scope       String              @default("club") @db.VarChar(20) // platform|club|member
+  level       Int                 @default(5) // 1 = highest authority
+  isSystem    Boolean             @default(false)
+  created     DateTime            @default(now()) @db.Timestamp(0)
+  modified    DateTime            @updatedAt @db.Timestamp(0)
+  permissions m_role_permission[]
+
+  @@index([key])
+}
+
+/// A discrete permission key (e.g. "booking.create").
+model m_permission {
+  id          String              @id @default(uuid()) @db.Uuid
+  key         String              @unique @db.VarChar(100)
+  name        String              @db.VarChar(255)
+  groupName   String?             @db.VarChar(100)
+  created     DateTime            @default(now()) @db.Timestamp(0)
+  roles       m_role_permission[]
+
+  @@index([key])
+}
+
+/// Many-to-many between roles and permissions.
+model m_role_permission {
+  id           String       @id @default(uuid()) @db.Uuid
+  roleId       String       @db.Uuid
+  permissionId String       @db.Uuid
+  created      DateTime     @default(now()) @db.Timestamp(0)
+  role         m_role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   m_permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+/// Active app version (kept for parity with sevenrent; used to build dashboard paths).
+model m_version {
+  id          String   @id @default(uuid()) @db.Uuid
+  versionName String   @db.VarChar(50)
+  isActive    Boolean  @default(true)
+  description String?
+  created     DateTime @default(now()) @db.Timestamp(0)
+  modified    DateTime @updatedAt @db.Timestamp(0)
+}
+
+/// Registry of tenants (clubs) and the DB connection used to reach each tenant database.
+/// In `custom` mode there is typically exactly one tenant.
+model m_tenant {
+  id         String   @id @default(uuid()) @db.Uuid
+  companyId  String   @unique @db.VarChar(50) // stable lowercase identifier, used at login
+  name       String   @db.VarChar(255)
+  slug       String   @unique @db.VarChar(100)
+  mode       String   @default("custom") @db.VarChar(20) // custom|product
+  status     String   @default("active") @db.VarChar(20) // active|trial|suspended|past_due
+  // Tenant database connection (custom mode: local Postgres)
+  dbHost     String   @db.VarChar(255)
+  dbPort     Int      @default(5432)
+  dbName     String   @db.VarChar(100)
+  dbUsername String   @db.VarChar(100)
+  dbPassword String   @db.VarChar(255)
+  created    DateTime @default(now()) @db.Timestamp(0)
+  modified   DateTime @updatedAt @db.Timestamp(0)
+
+  @@index([companyId])
+  @@index([slug])
+}

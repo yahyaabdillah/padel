@@ -217,10 +217,16 @@ export const userForRole = (role: UserRole): User =>
 
 const defaultUser = mockLoginUsers[1]; // owner — most common demo entry
 
-const storageKeys = {
-  userId: "padelhub-session-user-id",
-  token: "padelhub-session-token",
-};
+/** Real cookie session shape (subset) returned by the auth server action. */
+interface RealSession {
+  userId: string;
+  role: UserRole;
+  displayName: string;
+  id: string;
+  email?: string;
+  photo?: string;
+  companyId: string;
+}
 
 /* ════════════════════════════════════════════════════════
  * Context
@@ -267,8 +273,7 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [isSessionReady, setIsSessionReady] = useState(false);
-  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [realSession, setRealSession] = useState<RealSession | null>(null);
   // Permission resolver — defaults to the static map; AccessControlContext can
   // inject an editable resolver so RBAC edits flow through to gating.
   type Resolver = (role: UserRole) => string[];
@@ -276,24 +281,41 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({
     () => (role: UserRole) => defaultPermissionsByRole[role] ?? [],
   );
 
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      const storedUserId = window.localStorage.getItem(storageKeys.userId);
-      const storedToken = window.localStorage.getItem(storageKeys.token);
-      const storedUser = storedUserId ? mockUsers[storedUserId] : undefined;
-      if (storedUser && storedToken) {
-        setSessionUserId(storedUser.id);
-        setSessionToken(storedToken);
-      }
+  const loadSession = useCallback(async () => {
+    try {
+      const { getSessionAction } = await import(
+        "@/app/(full-width-pages)/(auth)/actions"
+      );
+      const s = await getSessionAction();
+      setRealSession((s as RealSession) ?? null);
+    } catch {
+      setRealSession(null);
+    } finally {
       setIsSessionReady(true);
-    }, 0);
-    return () => window.clearTimeout(id);
+    }
   }, []);
 
-  const isAuthenticated = Boolean(sessionUserId && sessionToken);
-  const currentUser = sessionUserId
-    ? mockUsers[sessionUserId] ?? defaultUser
-    : defaultUser;
+  useEffect(() => {
+    void loadSession();
+  }, [loadSession]);
+
+  const isAuthenticated = Boolean(realSession);
+  const sessionToken = realSession ? realSession.id : null;
+
+  // Enrich the real session with mock club/avatar data for demo surfaces.
+  const currentUser = useMemo<User>(() => {
+    if (!realSession) return defaultUser;
+    const template = userForRole(realSession.role);
+    return {
+      ...template,
+      id: realSession.id,
+      name: realSession.displayName || template.name,
+      email: realSession.email || template.email,
+      avatar: realSession.photo || template.avatar,
+      role: realSession.role,
+    };
+  }, [realSession]);
+
   const currentRole = currentUser.role;
 
   const permissions = useMemo(
@@ -301,17 +323,23 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({
     [currentRole, isAuthenticated, permissionResolver],
   );
 
-  const loginAsUser = useCallback((userId: string) => {
-    const next = mockUsers[userId];
-    if (!next) return;
-    const token = `padelhub-${next.id}-${Date.now()}`;
-    setSessionUserId(next.id);
-    setSessionToken(token);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(storageKeys.userId, next.id);
-      window.localStorage.setItem(storageKeys.token, token);
-    }
-  }, []);
+  // Demo helper retained for any callers that switch role client-side.
+  const loginAsUser = useCallback(
+    (userId: string) => {
+      const next = mockUsers[userId];
+      if (!next) return;
+      setRealSession({
+        userId: next.id,
+        role: next.role,
+        displayName: next.name,
+        id: next.id,
+        email: next.email,
+        photo: next.avatar,
+        companyId: next.tenantId || "smashcourt",
+      });
+    },
+    [],
+  );
 
   const loginAsRole = useCallback(
     (role: UserRole) => loginAsUser(userForRole(role).id),
@@ -319,22 +347,22 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const logout = useCallback(() => {
-    setSessionUserId(null);
-    setSessionToken(null);
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(storageKeys.userId);
-      window.localStorage.removeItem(storageKeys.token);
-    }
+    setRealSession(null);
+    void (async () => {
+      try {
+        const { logoutAction } = await import(
+          "@/app/(full-width-pages)/(auth)/actions"
+        );
+        await logoutAction();
+      } catch {
+        /* ignore */
+      }
+    })();
   }, []);
 
   const refreshSession = useCallback(() => {
-    if (!sessionUserId) return;
-    const token = `padelhub-${sessionUserId}-${Date.now()}`;
-    setSessionToken(token);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(storageKeys.token, token);
-    }
-  }, [sessionUserId]);
+    void loadSession();
+  }, [loadSession]);
 
   const setPermissionResolver = useCallback(
     (resolver: (role: UserRole) => string[]) => {

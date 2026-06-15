@@ -1,12 +1,11 @@
 "use client";
 
 import React from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useSidebar } from "@/context/SidebarContext";
 import { useRole } from "@/context/RoleContext";
 import { useMenu } from "@/context/MenuContext";
 import { useAccessControl } from "@/context/AccessControlContext";
-import DummyLoginPanel from "@/components/auth/DummyLoginPanel";
 import AppHeader from "@/layout/AppHeader";
 import AppSidebar from "@/layout/AppSidebar";
 import Backdrop from "@/layout/Backdrop";
@@ -23,6 +22,13 @@ export default function AdminLayout({
   const { items } = useMenu();
   const { isMenuVisible } = useAccessControl();
   const pathname = usePathname();
+  const router = useRouter();
+
+  React.useEffect(() => {
+    if (isSessionReady && !isAuthenticated) {
+      router.replace(`/signin?redirect=${encodeURIComponent(pathname)}`);
+    }
+  }, [isSessionReady, isAuthenticated, pathname, router]);
 
   if (!isSessionReady) {
     return (
@@ -39,7 +45,8 @@ export default function AdminLayout({
   }
 
   if (!isAuthenticated) {
-    return <DummyLoginPanel />;
+    // Middleware also enforces this; render nothing while redirecting.
+    return null;
   }
 
   const mainContentMargin = isMobileOpen

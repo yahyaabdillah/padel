@@ -31,7 +31,6 @@ import {
   type AvailableSlot,
   courtAvailableSlots,
   hourToSlot,
-  STORAGE_SLOT_MINUTES,
 } from "@/data/padel/club/courts";
 import { dateKey } from "@/data/padel/club/bookings";
 import {
@@ -41,7 +40,6 @@ import {
 } from "@/data/padel/club/members";
 
 const todayKey = "2026-06-02";
-const pad = (n: number) => String(n).padStart(2, "0");
 const LS_MEMBERS = "padelhub-club-members";
 
 /** Build duration options as multiples of the club booking step (up to 3h). */
@@ -72,7 +70,7 @@ interface BookingDraft {
 export default function NewBookingSearch() {
   const router = useRouter();
   const toast = useToast();
-  const { courts, bookings, addBooking, isReady } = useClubData();
+  const { courts, bookings, isReady } = useClubData();
   const { slotMinutes, isReady: hoursReady } = useOperatingHours();
 
   const durationOptions = useMemo(
@@ -83,7 +81,7 @@ export default function NewBookingSearch() {
   const [date, setDate] = useState<Date>(
     () => new Date(`${todayKey}T00:00:00`),
   );
-  const [duration, setDuration] = useState<number>(slotMinutes === 30 ? 90 : 60);
+  const [duration, setDuration] = useState<number>(60);
   const [results, setResults] = useState<CourtResult[] | null>(null);
   const [searchedMeta, setSearchedMeta] = useState<{
     dateKey: string;
@@ -219,37 +217,16 @@ export default function NewBookingSearch() {
     if (!member) return;
 
     const { court, slot } = draft;
-    const startH = Math.floor(slot.startSlot / 2);
-    const startM = (slot.startSlot % 2) * 30;
-    const endSlot = slot.startSlot + Math.ceil(searchedMeta.duration / STORAGE_SLOT_MINUTES);
-    const endH = Math.floor(endSlot / 2);
-    const endM = (endSlot % 2) * 30;
-
-    const key = searchedMeta.dateKey;
-    const startIso = `${key}T${pad(startH)}:${pad(startM)}:00`;
-    const endIso = `${key}T${pad(endH)}:${pad(endM)}:00`;
-
-    addBooking({
-      courtId: court.id,
-      start: startIso,
-      end: endIso,
-      type: member.tier === "daily" ? "walk_in" : "member",
-      status: "confirmed",
-      customer: member.name,
-      memberId: member.id,
-      partySize: court.format === "single" ? 2 : 4,
-      price: slot.price,
-      createdBy: "Front desk",
+    // hand off to the payment page; booking is created after payment
+    const params = new URLSearchParams({
+      court: court.id,
+      date: searchedMeta.dateKey,
+      slot: String(slot.startSlot),
+      duration: String(searchedMeta.duration),
+      price: String(slot.price),
+      member: member.id,
     });
-
-    toast.success(
-      `${court.name} · ${slot.startLabel}–${slot.endLabel} untuk ${member.name}.`,
-      "Booking dikonfirmasi",
-    );
-    setDraft(null);
-    setSelectedMemberId("");
-    // refresh availability so the just-booked slot disappears
-    runSearch();
+    router.push(`/bookings/payment?${params.toString()}`);
   };
 
   if (!isReady || !hoursReady) {
@@ -453,7 +430,7 @@ export default function NewBookingSearch() {
                 disabled={!selectedMemberId}
                 onClick={confirmBooking}
               >
-                Konfirmasi Booking
+                Lanjut Bayar
               </Button>
             </div>
           </div>

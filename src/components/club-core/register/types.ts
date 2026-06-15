@@ -41,6 +41,8 @@ export interface DraftBooking {
   courtId: string;
   dateKey: string; // YYYY-MM-DD
   hour: number; // start hour
+  /** start minute within the hour (0 or 30) — supports 30-min slots */
+  minute?: number;
   duration: number; // minutes
   /** raw court fee for this slot (peak-aware) */
   price: number;

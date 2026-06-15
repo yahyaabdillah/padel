@@ -1,6 +1,7 @@
 "use client";
 
-import React, { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import React, { ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import InputLabel from "@/components/ui/input/InputLabel";
 
 export type SelectOption = {
@@ -83,9 +84,37 @@ const Select: React.FC<SelectProps> = ({
     defaultValue ?? (multiple ? [] : "")
   );
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  // portal-positioned dropdown rect (relative to viewport / fixed)
+  const [menuRect, setMenuRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+  } | null>(null);
 
   useEffect(() => setOptions(initialOptions), [initialOptions]);
+
+  const updateMenuPosition = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setMenuRect({ left: r.left, top: r.bottom + 4, width: r.width });
+  };
+
+  // recompute position when opening + on scroll/resize while open
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    const handler = () => updateMenuPosition();
+    window.addEventListener("scroll", handler, true);
+    window.addEventListener("resize", handler);
+    return () => {
+      window.removeEventListener("scroll", handler, true);
+      window.removeEventListener("resize", handler);
+    };
+  }, [open]);
 
   const current = value !== undefined ? value : internal;
   const selectedArr = multiple
@@ -94,10 +123,19 @@ const Select: React.FC<SelectProps> = ({
     ? [current as string]
     : [];
 
-  // close on click outside
+  // close on click outside (account for portaled menu)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (
+        ref.current &&
+        !ref.current.contains(t) &&
+        menuRef.current &&
+        !menuRef.current.contains(t)
+      ) {
+        setOpen(false);
+        setSearch("");
+      } else if (ref.current && !ref.current.contains(t) && !menuRef.current) {
         setOpen(false);
         setSearch("");
       }
@@ -107,8 +145,8 @@ const Select: React.FC<SelectProps> = ({
   }, []);
 
   useEffect(() => {
-    if (open && searchable) searchRef.current?.focus();
-  }, [open, searchable]);
+    if (open && searchable && menuRect) searchRef.current?.focus();
+  }, [open, searchable, menuRect]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -185,6 +223,7 @@ const Select: React.FC<SelectProps> = ({
       <div className="relative">
         <button
           type="button"
+          ref={triggerRef}
           disabled={disabled}
           onClick={() => !disabled && setOpen((o) => !o)}
           className={[
@@ -224,58 +263,86 @@ const Select: React.FC<SelectProps> = ({
           </div>
         </button>
 
-        {open && (
-          <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-popover)] shadow-theme-xl">
-            {searchable && (
-              <div className="border-b border-[var(--border-light)] p-2">
-                <input
-                  ref={searchRef}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Cari..."
-                  className="h-9 w-full rounded-lg bg-[var(--surface-muted)] px-3 text-sm text-[var(--text-heading)] outline-none placeholder:text-[var(--text-muted)]"
-                />
-              </div>
-            )}
-            <div className="max-h-60 overflow-y-auto py-1">
-              {filtered.length === 0 && !showAdd && (
-                <p className="py-6 text-center text-xs text-[var(--text-muted)]">Tidak ada hasil</p>
+        {open && menuRect &&
+          createPortal(
+            <div
+              ref={menuRef}
+              style={{
+                position: "fixed",
+                left: menuRect.left,
+                top: menuRect.top,
+                width: menuRect.width,
+                zIndex: 100000,
+              }}
+              className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-popover)] shadow-theme-xl"
+            >
+              {searchable && (
+                <div className="border-b border-[var(--border-light)] p-2">
+                  <input
+                    ref={searchRef}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        // Enter on a no-match query with addable → add new
+                        if (showAdd) {
+                          handleAdd();
+                        } else if (filtered.length > 0) {
+                          handleSelect(filtered[0]);
+                        }
+                      } else if (e.key === "Escape") {
+                        setOpen(false);
+                        setSearch("");
+                      }
+                    }}
+                    placeholder="Cari..."
+                    className="h-9 w-full rounded-lg bg-[var(--surface-muted)] px-3 text-sm text-[var(--text-heading)] outline-none placeholder:text-[var(--text-muted)]"
+                  />
+                </div>
               )}
-              {showAdd && (
-                <button
-                  type="button"
-                  onClick={handleAdd}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-[var(--color-primary)] hover:bg-[var(--surface-muted)]"
-                >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                  Tambah &quot;{search.trim()}&quot;
-                </button>
-              )}
-              {filtered.map((option) => {
-                const isSelected = selectedArr.includes(option.value);
-                return (
+              <div className="max-h-60 overflow-y-auto py-1 custom-scrollbar">
+                {filtered.length === 0 && !showAdd && (
+                  <p className="py-6 text-center text-xs text-[var(--text-muted)]">
+                    Tidak ada hasil
+                  </p>
+                )}
+                {showAdd && (
                   <button
-                    key={option.value}
                     type="button"
-                    disabled={option.disabled}
-                    onClick={() => handleSelect(option)}
-                    className={[
-                      "flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm transition-colors",
-                      option.disabled ? "cursor-not-allowed opacity-50" : "hover:bg-[var(--surface-muted)]",
-                      isSelected ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium" : "text-[var(--text-body)]",
-                    ].join(" ")}
+                    onClick={handleAdd}
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-[var(--color-primary)] hover:bg-[var(--surface-muted)]"
                   >
-                    <div className="min-w-0">
-                      <p className="truncate">{option.label}</p>
-                      {option.desc && <p className="truncate text-[10px] text-[var(--text-muted)]">{option.desc}</p>}
-                    </div>
-                    {isSelected && <CheckIcon />}
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                    Tambah &quot;{search.trim()}&quot;
                   </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
+                )}
+                {filtered.map((option) => {
+                  const isSelected = selectedArr.includes(option.value);
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={option.disabled}
+                      onClick={() => handleSelect(option)}
+                      className={[
+                        "flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm transition-colors",
+                        option.disabled ? "cursor-not-allowed opacity-50" : "hover:bg-[var(--surface-muted)]",
+                        isSelected ? "bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium" : "text-[var(--text-body)]",
+                      ].join(" ")}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate">{option.label}</p>
+                        {option.desc && <p className="truncate text-[10px] text-[var(--text-muted)]">{option.desc}</p>}
+                      </div>
+                      {isSelected && <CheckIcon />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>,
+            document.body,
+          )}
       </div>
       {hint && <p className={`mt-1.5 text-xs ${error ? "text-[var(--color-error,#ef4444)]" : "text-[var(--text-caption)]"}`}>{hint}</p>}
     </div>
