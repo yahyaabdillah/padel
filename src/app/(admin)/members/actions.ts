@@ -47,8 +47,6 @@ export type RegisterMemberInput = {
   name: string;
   /** login username for the member portal */
   username: string;
-  /** plain password chosen at registration (hashed server-side) */
-  password: string;
   phone: string;
   email?: string;
   city?: string;
@@ -67,6 +65,8 @@ export type RegisterMemberResult = {
   id?: string;
   memberNo?: string;
   username?: string;
+  /** system-generated initial password (show once so staff can hand it over) */
+  tempPassword?: string;
 };
 
 async function requireSession(): Promise<AuthSession | null> {
@@ -82,6 +82,17 @@ async function requireSession(): Promise<AuthSession | null> {
 
 function genMemberNo(): string {
   return `PHB-2026-${String(1000 + Math.floor(Math.random() * 8999))}`;
+}
+
+/** Generate a readable temporary password (no ambiguous chars). The member can
+ * change it later from their portal account. */
+function genTempPassword(): string {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  let out = "";
+  for (let i = 0; i < 10; i++) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
 }
 
 /** Membership plan benefits surfaced to the registration / booking UIs. */
@@ -290,9 +301,6 @@ export async function registerMemberAction(
     if (username.length < 3) {
       return { success: false, error: "Username minimal 3 karakter." };
     }
-    if (!input.password || input.password.length < 6) {
-      return { success: false, error: "Password minimal 6 karakter." };
-    }
     if (input.phone.replace(/\D/g, "").length < 8) {
       return { success: false, error: "Nomor telepon tidak valid." };
     }
@@ -308,7 +316,8 @@ export async function registerMemberAction(
     }
 
     const memberNo = genMemberNo();
-    const passwordHash = await bcrypt.hash(input.password, 10);
+    const tempPassword = genTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
 
     // Resolve the membership plan (if any) for assignment + tier label.
     let planId: string | null = null;
@@ -414,7 +423,7 @@ export async function registerMemberAction(
     }
 
     revalidatePath("/members");
-    return { success: true, id: member.id, memberNo, username };
+    return { success: true, id: member.id, memberNo, username, tempPassword };
   } catch (err) {
     console.error("[registerMemberAction] error:", err);
     return { success: false, error: "Gagal mendaftarkan member." };

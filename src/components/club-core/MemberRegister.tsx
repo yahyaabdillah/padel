@@ -112,7 +112,6 @@ export default function MemberRegister() {
   // ── identity ──
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
 
@@ -121,7 +120,7 @@ export default function MemberRegister() {
   const [courtDrafts, setCourtDrafts] = useState<DraftBooking[]>([]);
 
   const [submitted, setSubmitted] = useState(false);
-  const [done, setDone] = useState<null | { memberNo: string; username: string }>(null);
+  const [done, setDone] = useState<null | { memberNo: string; username: string; tempPassword: string }>(null);
   const [saving, setSaving] = useState(false);
 
   // ── benefit / cost (shared helper) ──
@@ -152,7 +151,6 @@ export default function MemberRegister() {
   const identityValid =
     name.trim().length >= 2 &&
     username.trim().length >= 3 &&
-    password.length >= 6 &&
     phone.replace(/\D/g, "").length >= 8 &&
     emailValid(email);
   const canSubmit = identityValid;
@@ -202,7 +200,6 @@ export default function MemberRegister() {
     const res = await registerMemberAction({
       name: name.trim(),
       username: username.trim().toLowerCase(),
-      password,
       phone,
       email: email.trim() || undefined,
       planId,
@@ -234,7 +231,11 @@ export default function MemberRegister() {
       });
     });
 
-    setDone({ memberNo: res.memberNo, username: res.username || username.trim().toLowerCase() });
+    setDone({
+      memberNo: res.memberNo,
+      username: res.username || username.trim().toLowerCase(),
+      tempPassword: res.tempPassword ?? "",
+    });
     toast.success(
       `${name.trim()} terdaftar${plan ? ` · ${plan.name}` : ""}.`,
       "Registrasi berhasil",
@@ -244,7 +245,6 @@ export default function MemberRegister() {
   const reset = () => {
     setName("");
     setUsername("");
-    setPassword("");
     setPhone("");
     setEmail("");
     const def = plans.find((p) => p.highlighted) ?? plans[0] ?? null;
@@ -299,30 +299,17 @@ export default function MemberRegister() {
                     error={submitted && name.trim().length < 2}
                     errorText="Nama minimal 2 karakter"
                   />
-                  <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                    <TextInput
-                      label="Username"
-                      labelInfo="Username untuk login member ke portal. Huruf kecil tanpa spasi, unik per klub."
-                      value={username}
-                      onChange={(v) => setUsername(v.toLowerCase().replace(/\s+/g, ""))}
-                      placeholder="cth. andiwijaya"
-                      required
-                      error={submitted && username.trim().length < 3}
-                      errorText="Username minimal 3 karakter"
-                      hint="Dipakai member untuk login"
-                    />
-                    <TextInput
-                      label="Password"
-                      labelInfo="Password awal untuk login member. Minimal 6 karakter; member bisa menggantinya nanti."
-                      type="password"
-                      value={password}
-                      onChange={setPassword}
-                      placeholder="Minimal 6 karakter"
-                      required
-                      error={submitted && password.length < 6}
-                      errorText="Password minimal 6 karakter"
-                    />
-                  </div>
+                  <TextInput
+                    label="Username"
+                    labelInfo="Username untuk login member ke portal. Huruf kecil tanpa spasi, unik per klub."
+                    value={username}
+                    onChange={(v) => setUsername(v.toLowerCase().replace(/\s+/g, ""))}
+                    placeholder="cth. andiwijaya"
+                    required
+                    error={submitted && username.trim().length < 3}
+                    errorText="Username minimal 3 karakter"
+                    hint="Password login dibuat otomatis oleh sistem & ditampilkan setelah simpan"
+                  />
                   <PhoneInput
                     label="Nomor Telepon"
                     labelInfo="Nomor aktif untuk notifikasi booking & WhatsApp. Format: +62 8xx xxxx xxxx."
@@ -590,7 +577,21 @@ export default function MemberRegister() {
                   {done.username}
                 </span>
               </div>
+              {done.tempPassword && (
+                <div className="mt-1.5 flex justify-between">
+                  <span className="text-[var(--text-caption)]">Password</span>
+                  <span className="font-mono font-semibold text-[var(--text-heading)]">
+                    {done.tempPassword}
+                  </span>
+                </div>
+              )}
             </div>
+            {done.tempPassword && (
+              <p className="mx-auto mt-3 max-w-xs text-xs text-[var(--text-caption)]">
+                Password dibuat otomatis. Berikan ke member — mereka bisa
+                menggantinya nanti dari akun member.
+              </p>
+            )}
             <div className="mt-6">
               <Button variant="primary" sheen fullWidth onClick={reset}>
                 Daftar member lain
