@@ -316,7 +316,6 @@ async function seedTenant() {
     {
       name: "Pro",
       color: "#6D5BFF",
-      priceMonthly: 450_000,
       joinFee: 450_000,
       includedCourtBookings: 4,
       resetPeriodDays: 30,
@@ -334,7 +333,6 @@ async function seedTenant() {
     {
       name: "Elite",
       color: "#14B8A6",
-      priceMonthly: 850_000,
       joinFee: 850_000,
       includedCourtBookings: 8,
       resetPeriodDays: 30,

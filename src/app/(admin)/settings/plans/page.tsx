@@ -79,7 +79,6 @@ export default function MembershipPlansPage() {
     setEditing({
       name: "",
       color: PALETTE[0],
-      priceMonthly: 0,
       joinFee: 0,
       includedCourtBookings: 0,
       resetPeriodDays: 30,
@@ -129,7 +128,7 @@ export default function MembershipPlansPage() {
 
   const stats = useMemo(() => {
     const active = plans.filter((p) => p.active).length;
-    const paid = plans.filter((p) => p.priceMonthly > 0).length;
+    const paid = plans.filter((p) => p.joinFee > 0).length;
     return { total: plans.length, active, paid };
   }, [plans]);
 
@@ -202,15 +201,10 @@ export default function MembershipPlansPage() {
               {/* price */}
               <div className="mt-4">
                 <span className="text-2xl font-extrabold text-[var(--text-heading)]">
-                  {p.priceMonthly === 0 ? "Gratis" : formatIDR(p.priceMonthly)}
+                  {p.joinFee === 0 ? "Gratis" : formatIDR(p.joinFee)}
                 </span>
-                {p.priceMonthly > 0 && (
-                  <span className="text-sm text-[var(--text-muted)]"> /bulan</span>
-                )}
                 {p.joinFee > 0 && (
-                  <p className="mt-0.5 text-xs text-[var(--text-caption)]">
-                    + join fee {formatIDR(p.joinFee)}
-                  </p>
+                  <span className="text-sm text-[var(--text-muted)]"> join fee</span>
                 )}
               </div>
 
@@ -356,14 +350,8 @@ export default function MembershipPlansPage() {
               </h4>
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <CurrencyInput
-                  label="Harga / bulan"
-                  labelInfo="Biaya keanggotaan berulang. Kosongkan / 0 untuk plan gratis."
-                  value={editing.priceMonthly}
-                  onChange={(v) => setEditing({ ...editing, priceMonthly: v })}
-                />
-                <CurrencyInput
                   label="Join fee"
-                  labelInfo="Biaya pendaftaran sekali bayar saat member bergabung."
+                  labelInfo="Biaya pendaftaran sekali bayar saat member bergabung. Kosongkan / 0 untuk plan gratis."
                   value={editing.joinFee}
                   onChange={(v) => setEditing({ ...editing, joinFee: v })}
                 />

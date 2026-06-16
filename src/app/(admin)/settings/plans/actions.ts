@@ -23,7 +23,6 @@ export type PlanRecord = {
   id: string;
   name: string;
   color: string;
-  priceMonthly: number;
   joinFee: number;
   includedCourtBookings: number;
   resetPeriodDays: number;
@@ -41,7 +40,6 @@ function toRecord(p: {
   id: string;
   name: string;
   color: string;
-  priceMonthly: number;
   joinFee: number;
   includedCourtBookings: number;
   resetPeriodDays: number;
@@ -56,7 +54,6 @@ function toRecord(p: {
     id: p.id,
     name: p.name,
     color: p.color,
-    priceMonthly: p.priceMonthly,
     joinFee: p.joinFee,
     includedCourtBookings: p.includedCourtBookings,
     resetPeriodDays: p.resetPeriodDays,
@@ -93,7 +90,6 @@ export async function createPlanAction(
       companyId: session.companyId,
       name: input.name.trim(),
       color: input.color,
-      priceMonthly: input.priceMonthly,
       joinFee: input.joinFee,
       includedCourtBookings: input.includedCourtBookings,
       resetPeriodDays: input.resetPeriodDays,
@@ -122,7 +118,6 @@ export async function updatePlanAction(
     data: {
       ...(patch.name !== undefined && { name: patch.name.trim() }),
       ...(patch.color !== undefined && { color: patch.color }),
-      ...(patch.priceMonthly !== undefined && { priceMonthly: patch.priceMonthly }),
       ...(patch.joinFee !== undefined && { joinFee: patch.joinFee }),
       ...(patch.includedCourtBookings !== undefined && {
         includedCourtBookings: patch.includedCourtBookings,

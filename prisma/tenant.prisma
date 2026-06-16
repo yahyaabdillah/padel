@@ -123,8 +123,6 @@ model m_membership_plan {
   companyId             String  @db.VarChar(50)
   name                  String  @db.VarChar(100)
   color                 String  @default("#6D5BFF") @db.VarChar(20)
-  /// recurring fee in IDR (0 = free)
-  priceMonthly          Int     @default(0)
   /// one-time join fee in IDR (0 = none)
   joinFee               Int     @default(0)
   /// free court bookings included per cycle
