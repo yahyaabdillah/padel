@@ -4,8 +4,7 @@ import React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSidebar } from "@/context/SidebarContext";
 import { useRole } from "@/context/RoleContext";
-import { useMenu } from "@/context/MenuContext";
-import { useAccessControl } from "@/context/AccessControlContext";
+import { useAccess } from "@/context/AccessContext";
 import AppHeader from "@/layout/AppHeader";
 import AppSidebar from "@/layout/AppSidebar";
 import Backdrop from "@/layout/Backdrop";
@@ -17,10 +16,8 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const { isExpanded, isHovered, isMobileOpen } = useSidebar();
-  const { currentRole, hasAnyPermission, isAuthenticated, isSessionReady } =
-    useRole();
-  const { items } = useMenu();
-  const { isMenuVisible } = useAccessControl();
+  const { currentRole, isAuthenticated, isSessionReady } = useRole();
+  const { isReady: accessReady, canViewPath, menuForPath } = useAccess();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -55,22 +52,9 @@ export default function AdminLayout({
     ? "lg:ml-[290px]"
     : "lg:ml-[90px]";
 
-  // Resolve the menu item that owns this path (longest match) to gate access.
-  const match = items
-    .filter(
-      (m) =>
-        m.path &&
-        (m.path === pathname ||
-          (m.path !== "/" && pathname.startsWith(`${m.path}/`))),
-    )
-    .sort((a, b) => b.path.length - a.path.length)[0];
-
-  const isAccessDenied = Boolean(
-    match &&
-      (!match.roles.includes(currentRole) ||
-        !isMenuVisible(currentRole, match.id) ||
-        (match.permission ? !hasAnyPermission([match.permission]) : false)),
-  );
+  // Resolve the menu that owns this path + whether the role may view it.
+  const ownerMenu = menuForPath(pathname);
+  const isAccessDenied = accessReady && !canViewPath(pathname);
 
   return (
     <div className="min-h-screen xl:flex">
@@ -91,7 +75,7 @@ export default function AdminLayout({
               </h1>
               <p className="mx-auto mt-2 max-w-md text-sm text-gray-500 dark:text-gray-400">
                 Your current role ({currentRole}) does not have permission to
-                open {match ? `"${match.label}"` : "this page"}.
+                open {ownerMenu ? `"${ownerMenu.label}"` : "this page"}.
               </p>
             </div>
           ) : (

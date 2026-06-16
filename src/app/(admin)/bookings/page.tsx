@@ -14,6 +14,7 @@ import Button from "@/components/ui/button/Button";
 import Tabs from "@/components/ui/tabs/Tabs";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { ClubDataProvider, useClubData } from "@/components/club-core/ClubDataContext";
+import { useAccess } from "@/context/AccessContext";
 import CourtGrid from "@/components/club-core/CourtGrid";
 import BookingModal from "@/components/club-core/BookingModal";
 import ToneBadge from "@/components/club-core/ToneBadge";
@@ -31,6 +32,8 @@ const isWeekendKey = (key: string) => {
 
 function BookingsInner() {
   const { courts, bookings, cancelBooking } = useClubData();
+  const { can } = useAccess();
+  const canCancel = can("booking.list", "cancel");
   const toast = useToast();
   const router = useRouter();
   const calendarRef = useRef<FullCalendar>(null);
@@ -249,6 +252,7 @@ function BookingsInner() {
           cancelBooking(id);
           toast.info("Booking cancelled");
         }}
+        canCancel={canCancel}
       />
     </div>
   );

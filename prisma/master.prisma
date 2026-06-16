@@ -27,6 +27,7 @@ model m_role {
   level       Int                 @default(5) // 1 = highest authority
   isSystem    Boolean             @default(false)
   permissions m_role_permission[]
+  roleMenus   m_role_menu[]
 
   // ── audit + soft delete ──
   createdAt DateTime  @default(now()) @db.Timestamp(0)
@@ -82,6 +83,77 @@ model m_role_permission {
   @@unique([roleId, permissionId])
   @@index([roleId])
   @@index([permissionId])
+}
+
+/// A sidebar / navigation menu entry. Hierarchical via parentKey. Stored in the
+/// master DB so menus + their per-role action permissions are configurable from
+/// the Access Control UI (no code change to add/hide a menu).
+model m_menu {
+  id        String  @id @default(uuid()) @db.Uuid
+  /// stable slug key (e.g. "bookings", "members"); used to map role permissions
+  key       String  @unique @db.VarChar(100)
+  label     String  @db.VarChar(150)
+  /// route path; empty for a group parent with children
+  path      String  @default("") @db.VarChar(200)
+  /// lucide-react export name (e.g. "CalendarDays", "Users")
+  icon      String  @default("LayoutGrid") @db.VarChar(60)
+  /// parent menu key; null = top-level
+  parentKey String? @db.VarChar(100)
+  /// sidebar bucket: main | master | others
+  groupKey  String  @default("others") @db.VarChar(20)
+  /// section heading (Platform | Club | Member) — informational grouping
+  section   String  @default("Club") @db.VarChar(40)
+  /// display order within its parent/group
+  sortOrder Int     @default(0)
+  /// optional badge: new | soon | hot
+  badge     String? @db.VarChar(20)
+  isActive  Boolean @default(true)
+
+  roleMenus m_role_menu[]
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  @@index([key])
+  @@index([parentKey])
+  @@index([isDeleted])
+}
+
+/// Per-(role, menu) access matrix. Each row holds the 6 granular action flags
+/// that gate both menu visibility (canView) and the actions on that page.
+model m_role_menu {
+  id        String  @id @default(uuid()) @db.Uuid
+  roleId    String  @db.Uuid
+  menuId    String  @db.Uuid
+  canView   Boolean @default(false)
+  canCreate Boolean @default(false)
+  canUpdate Boolean @default(false)
+  canDelete Boolean @default(false)
+  canCancel Boolean @default(false)
+  canImport Boolean @default(false)
+  canExport Boolean @default(false)
+
+  role m_role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  menu m_menu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  @@unique([roleId, menuId])
+  @@index([roleId])
+  @@index([menuId])
 }
 
 /// Active app version (kept for parity with sevenrent; used to build dashboard paths).

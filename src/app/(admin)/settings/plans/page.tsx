@@ -28,6 +28,7 @@ import Textarea from "@/components/ui/input/Textarea";
 import InputLabel from "@/components/ui/input/InputLabel";
 import { ModalDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
+import { useAccess } from "@/context/AccessContext";
 import { formatIDR } from "@/components/club-core/format";
 import {
   getPlansAction,
@@ -48,6 +49,10 @@ const perksFromText = (t: string): string[] =>
 
 export default function MembershipPlansPage() {
   const toast = useToast();
+  const { can } = useAccess();
+  const canCreate = can("master.plans", "create");
+  const canUpdate = can("master.plans", "update");
+  const canDelete = can("master.plans", "delete");
   const [plans, setPlans] = useState<PlanRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Draft | null>(null);
@@ -138,9 +143,11 @@ export default function MembershipPlansPage() {
       subtitle="Atur benefit tiap plan: harga, kuota booking gratis, diskon, dan jatah coaching. Benefit langsung dipakai saat booking & registrasi member."
       requireAny={["settings.view"]}
       actions={
-        <Button variant="primary" sheen glow startIcon={<Plus className="h-4 w-4" />} onClick={openNew}>
-          Tambah Plan
-        </Button>
+        canCreate ? (
+          <Button variant="primary" sheen glow startIcon={<Plus className="h-4 w-4" />} onClick={openNew}>
+            Tambah Plan
+          </Button>
+        ) : undefined
       }
     >
       {/* summary chips */}
@@ -251,30 +258,37 @@ export default function MembershipPlansPage() {
 
             {/* actions */}
             <div className="mt-auto flex gap-2 border-t border-[var(--border-light)] p-4">
-              <Button
-                size="sm"
-                variant="outline"
-                fullWidth
-                startIcon={<Pencil className="h-3.5 w-3.5" />}
-                onClick={() => openEdit(p)}
-              >
-                Edit
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
-                onClick={() => setConfirmDelete(p)}
-                aria-label={`Hapus ${p.name}`}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              {canUpdate && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  fullWidth
+                  startIcon={<Pencil className="h-3.5 w-3.5" />}
+                  onClick={() => openEdit(p)}
+                >
+                  Edit
+                </Button>
+              )}
+              {canDelete && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
+                  onClick={() => setConfirmDelete(p)}
+                  aria-label={`Hapus ${p.name}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+              {!canUpdate && !canDelete && (
+                <span className="px-1 text-xs text-[var(--text-muted)]">Hanya lihat</span>
+              )}
             </div>
           </Card>
         ))}
 
         {/* add tile */}
-        {!loading && (
+        {!loading && canCreate && (
         <button
           type="button"
           onClick={openNew}

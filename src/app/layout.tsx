@@ -5,6 +5,7 @@ import { SidebarProvider } from "@/context/SidebarContext";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { RoleProvider } from "@/context/RoleContext";
 import { AccessControlProvider } from "@/context/AccessControlContext";
+import { AccessProvider } from "@/context/AccessContext";
 import { MenuProvider } from "@/context/MenuContext";
 import { OperatingHoursProvider } from "@/context/OperatingHoursContext";
 import { NotificationProvider } from "@/context/NotificationContext";
@@ -35,24 +36,26 @@ export default function RootLayout({
           <RoleProvider>
             <OnboardingProvider>
               <AccessControlProvider>
-                <MenuProvider>
-                  <OperatingHoursProvider>
-                    <NotificationProvider>
-                      <PromoProvider>
-                        <MembershipProvider>
-                          <FormBuilderProvider>
-                            <ToastProvider>
-                              <SidebarProvider>
-                                {children}
-                                <OnboardingPrompt />
-                              </SidebarProvider>
-                            </ToastProvider>
-                          </FormBuilderProvider>
-                        </MembershipProvider>
-                      </PromoProvider>
-                    </NotificationProvider>
-                  </OperatingHoursProvider>
-                </MenuProvider>
+                <AccessProvider>
+                  <MenuProvider>
+                    <OperatingHoursProvider>
+                      <NotificationProvider>
+                        <PromoProvider>
+                          <MembershipProvider>
+                            <FormBuilderProvider>
+                              <ToastProvider>
+                                <SidebarProvider>
+                                  {children}
+                                  <OnboardingPrompt />
+                                </SidebarProvider>
+                              </ToastProvider>
+                            </FormBuilderProvider>
+                          </MembershipProvider>
+                        </PromoProvider>
+                      </NotificationProvider>
+                    </OperatingHoursProvider>
+                  </MenuProvider>
+                </AccessProvider>
               </AccessControlProvider>
             </OnboardingProvider>
           </RoleProvider>

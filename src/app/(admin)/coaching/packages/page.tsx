@@ -16,6 +16,7 @@ import CurrencyInput from "@/components/ui/input/CurrencyInput";
 import InputLabel from "@/components/ui/input/InputLabel";
 import { ModalDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
+import { useAccess } from "@/context/AccessContext";
 import { formatIDR } from "@/components/club-core/format";
 import {
   getCoachPackagesAction,
@@ -42,6 +43,10 @@ const emptyDraft = (sortOrder: number): Draft => ({
 
 export default function CoachPackagesPage() {
   const toast = useToast();
+  const { can } = useAccess();
+  const canCreate = can("coaching.packages", "create");
+  const canUpdate = can("coaching.packages", "update");
+  const canDelete = can("coaching.packages", "delete");
   const [packages, setPackages] = useState<PackageRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Draft | null>(null);
@@ -124,9 +129,11 @@ export default function CoachPackagesPage() {
       subtitle="Kelola paket coaching. Tiap paket berisi sejumlah sesi (x pertemuan) dengan biaya paket."
       requireAny={["coaching.view"]}
       actions={
-        <Button variant="primary" sheen glow startIcon={<Plus className="h-4 w-4" />} onClick={openNew}>
-          Tambah Paket
-        </Button>
+        canCreate ? (
+          <Button variant="primary" sheen glow startIcon={<Plus className="h-4 w-4" />} onClick={openNew}>
+            Tambah Paket
+          </Button>
+        ) : undefined
       }
     >
       <div className="mb-6 flex flex-wrap gap-2">
@@ -187,23 +194,30 @@ export default function CoachPackagesPage() {
                 </div>
 
                 <div className="mt-auto flex gap-2 border-t border-[var(--border-light)] p-4">
-                  <Button size="sm" variant="outline" fullWidth startIcon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openEdit(p)}>
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
-                    onClick={() => setConfirmDelete(p)}
-                    aria-label={`Hapus ${p.name}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {canUpdate && (
+                    <Button size="sm" variant="outline" fullWidth startIcon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openEdit(p)}>
+                      Edit
+                    </Button>
+                  )}
+                  {canDelete && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
+                      onClick={() => setConfirmDelete(p)}
+                      aria-label={`Hapus ${p.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {!canUpdate && !canDelete && (
+                    <span className="px-1 text-xs text-[var(--text-muted)]">Hanya lihat</span>
+                  )}
                 </div>
               </Card>
             ))}
 
-        {!loading && (
+        {!loading && canCreate && (
           <button
             type="button"
             onClick={openNew}

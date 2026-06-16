@@ -23,6 +23,9 @@ interface MemberDetailDrawerProps {
   onClose: () => void;
   /** called after a successful edit/delete so the parent can refresh */
   onChanged?: () => void;
+  /** action permissions (from useAccess) */
+  canUpdate?: boolean;
+  canDelete?: boolean;
 }
 
 const statusMeta: Record<
@@ -39,6 +42,8 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
   isOpen,
   onClose,
   onChanged,
+  canUpdate = true,
+  canDelete = true,
 }) => {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
@@ -151,21 +156,25 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
               {saving ? "Menyimpan…" : "Simpan"}
             </Button>
           </div>
-        ) : (
+        ) : canUpdate || canDelete ? (
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              fullWidth
-              className="!text-red-500 hover:!bg-red-50 dark:hover:!bg-red-500/10"
-              onClick={() => setConfirmDelete(true)}
-            >
-              Hapus
-            </Button>
-            <Button variant="primary" fullWidth sheen onClick={() => setEditing(true)}>
-              Edit
-            </Button>
+            {canDelete && (
+              <Button
+                variant="outline"
+                fullWidth
+                className="!text-red-500 hover:!bg-red-50 dark:hover:!bg-red-500/10"
+                onClick={() => setConfirmDelete(true)}
+              >
+                Hapus
+              </Button>
+            )}
+            {canUpdate && (
+              <Button variant="primary" fullWidth sheen onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
           </div>
-        )
+        ) : undefined
       }
     >
       <div className="space-y-6">
@@ -232,9 +241,11 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
           <div className="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-semibold text-[var(--text-heading)]">Membership</span>
-              <Button variant="outline" size="sm" onClick={openPlanModal}>
-                {member.planId ? "Ubah" : "Atur"}
-              </Button>
+              {canUpdate && (
+                <Button variant="outline" size="sm" onClick={openPlanModal}>
+                  {member.planId ? "Ubah" : "Atur"}
+                </Button>
+              )}
             </div>
             {member.planId ? (
               <div className="space-y-2">

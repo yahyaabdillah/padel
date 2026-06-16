@@ -23,6 +23,7 @@ import CurrencyInput from "@/components/ui/input/CurrencyInput";
 import InputLabel from "@/components/ui/input/InputLabel";
 import { ModalDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
+import { useAccess } from "@/context/AccessContext";
 import { formatIDR } from "@/components/club-core/format";
 import {
   getCoachesAction,
@@ -79,6 +80,10 @@ const availabilityLabel = (av: CoachAvailability[]): string => {
 
 export default function CoachListPage() {
   const toast = useToast();
+  const { can } = useAccess();
+  const canCreate = can("coaching.coaches", "create");
+  const canUpdate = can("coaching.coaches", "update");
+  const canDelete = can("coaching.coaches", "delete");
   const [coaches, setCoaches] = useState<CoachRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Draft | null>(null);
@@ -193,9 +198,11 @@ export default function CoachListPage() {
       subtitle="Daftar coach beserta jam operasional & ketersediaan. Ketersediaan dipakai saat menyusun jadwal coaching."
       requireAny={["coaching.view"]}
       actions={
-        <Button variant="primary" sheen glow startIcon={<Plus className="h-4 w-4" />} onClick={openNew}>
-          Tambah Coach
-        </Button>
+        canCreate ? (
+          <Button variant="primary" sheen glow startIcon={<Plus className="h-4 w-4" />} onClick={openNew}>
+            Tambah Coach
+          </Button>
+        ) : undefined
       }
     >
       <div className="mb-6 flex flex-wrap gap-2">
@@ -297,23 +304,30 @@ export default function CoachListPage() {
                 </div>
 
                 <div className="mt-auto flex gap-2 border-t border-[var(--border-light)] p-4">
-                  <Button size="sm" variant="outline" fullWidth startIcon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openEdit(c)}>
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
-                    onClick={() => setConfirmDelete(c)}
-                    aria-label={`Hapus ${c.name}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {canUpdate && (
+                    <Button size="sm" variant="outline" fullWidth startIcon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openEdit(c)}>
+                      Edit
+                    </Button>
+                  )}
+                  {canDelete && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
+                      onClick={() => setConfirmDelete(c)}
+                      aria-label={`Hapus ${c.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {!canUpdate && !canDelete && (
+                    <span className="px-1 text-xs text-[var(--text-muted)]">Hanya lihat</span>
+                  )}
                 </div>
               </Card>
             ))}
 
-        {!loading && (
+        {!loading && canCreate && (
           <button
             type="button"
             onClick={openNew}

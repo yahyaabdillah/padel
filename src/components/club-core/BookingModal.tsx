@@ -30,6 +30,8 @@ interface BookingModalProps {
   isWeekend: boolean;
   onCreate: (booking: Omit<Booking, "id">) => void;
   onCancel: (id: string) => void;
+  /** whether the current role may cancel a booking */
+  canCancel?: boolean;
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -43,6 +45,7 @@ const BookingModal: React.FC<BookingModalProps> = ({
   isWeekend,
   onCreate,
   onCancel,
+  canCancel = true,
 }) => {
   const activeCourts = courts.filter((c) => c.status === "active");
   const [courtId, setCourtId] = useState(activeCourts[0]?.id ?? "");
@@ -114,7 +117,9 @@ const BookingModal: React.FC<BookingModalProps> = ({
             <Button variant="outline" onClick={onClose}>
               Close
             </Button>
-            {existing.status !== "cancelled" && existing.status !== "completed" && (
+            {canCancel &&
+              existing.status !== "cancelled" &&
+              existing.status !== "completed" && (
               <Button
                 variant="primary"
                 className="!bg-red-500 hover:!bg-red-600"

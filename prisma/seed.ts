@@ -3,6 +3,7 @@
 import * as bcrypt from "bcryptjs";
 import { PrismaClient as MasterClient } from "@prisma/master-client";
 import { PrismaClient as TenantClient } from "@prisma/tenant-client";
+import { MENU_CATALOG, MENU_ACTIONS } from "../src/data/padel/menu-catalog";
 
 const master = new MasterClient();
 const tenant = new TenantClient();
@@ -123,6 +124,69 @@ async function seedMaster() {
       if (!pid) continue;
       await master.m_role_permission.create({
         data: { roleId: role.id, permissionId: pid, createdBy: "seed" },
+      });
+    }
+  }
+
+  console.log("→ Seeding master: menus + role-menu permissions");
+  // role id lookup by key
+  const roleByKey: Record<string, string> = {};
+  for (const r of ROLES) {
+    const row = await master.m_role.findUnique({ where: { key: r.key } });
+    if (row) roleByKey[r.key] = row.id;
+  }
+  const menuIdByKey: Record<string, string> = {};
+  for (const m of MENU_CATALOG) {
+    const row = await master.m_menu.upsert({
+      where: { key: m.key },
+      update: {
+        label: m.label,
+        path: m.path,
+        icon: m.icon,
+        parentKey: m.parentKey,
+        groupKey: m.groupKey,
+        section: m.section,
+        sortOrder: m.sortOrder,
+        badge: m.badge ?? null,
+        isActive: true,
+        isDeleted: 0,
+        updatedBy: "seed",
+      },
+      create: {
+        key: m.key,
+        label: m.label,
+        path: m.path,
+        icon: m.icon,
+        parentKey: m.parentKey,
+        groupKey: m.groupKey,
+        section: m.section,
+        sortOrder: m.sortOrder,
+        badge: m.badge ?? null,
+        createdBy: "seed",
+      },
+    });
+    menuIdByKey[m.key] = row.id;
+  }
+  // role-menu grants from catalog defaults
+  for (const m of MENU_CATALOG) {
+    for (const [roleKey, grant] of Object.entries(m.grants)) {
+      const roleId = roleByKey[roleKey];
+      const menuId = menuIdByKey[m.key];
+      if (!roleId || !menuId) continue;
+      const actions = grant === "*" ? [...MENU_ACTIONS] : grant;
+      const flags = {
+        canView: actions.includes("view"),
+        canCreate: actions.includes("create"),
+        canUpdate: actions.includes("update"),
+        canDelete: actions.includes("delete"),
+        canCancel: actions.includes("cancel"),
+        canImport: actions.includes("import"),
+        canExport: actions.includes("export"),
+      };
+      await master.m_role_menu.upsert({
+        where: { roleId_menuId: { roleId, menuId } },
+        update: { ...flags, isDeleted: 0, updatedBy: "seed" },
+        create: { roleId, menuId, ...flags, createdBy: "seed" },
       });
     }
   }

@@ -7,6 +7,7 @@ import Button from "@/components/ui/button/Button";
 import EmptyState from "@/components/ui/feedback/EmptyState";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { ClubDataProvider, useClubData } from "@/components/club-core/ClubDataContext";
+import { useAccess } from "@/context/AccessContext";
 import ToneBadge from "@/components/club-core/ToneBadge";
 import { formatIDR } from "@/components/club-core/format";
 import {
@@ -36,6 +37,10 @@ function CourtsInner() {
   const router = useRouter();
   const { courts, deleteCourt } = useClubData();
   const toast = useToast();
+  const { can } = useAccess();
+  const canCreate = can("master.courts", "create");
+  const canUpdate = can("master.courts", "update");
+  const canDelete = can("master.courts", "delete");
 
   const goCreate = () => router.push("/courts/new");
   const goEdit = (c: Court) => router.push(`/courts/${c.id}/edit`);
@@ -68,15 +73,17 @@ function CourtsInner() {
             Rata-rata peak {formatIDR(avgPeak, true)}
           </span>
         </div>
-        <Button
-          variant="primary"
-          sheen
-          glow
-          onClick={goCreate}
-          startIcon={<span className="text-base leading-none">+</span>}
-        >
-          Tambah Lapangan
-        </Button>
+        {canCreate && (
+          <Button
+            variant="primary"
+            sheen
+            glow
+            onClick={goCreate}
+            startIcon={<span className="text-base leading-none">+</span>}
+          >
+            Tambah Lapangan
+          </Button>
+        )}
       </div>
 
       {courts.length === 0 ? (
@@ -84,9 +91,11 @@ function CourtsInner() {
           title="Belum ada lapangan"
           description="Tambahkan lapangan padel pertama Anda untuk mulai menerima booking."
           action={
-            <Button variant="primary" onClick={goCreate}>
-              Tambah Lapangan
-            </Button>
+            canCreate ? (
+              <Button variant="primary" onClick={goCreate}>
+                Tambah Lapangan
+              </Button>
+            ) : undefined
           }
         />
       ) : (
@@ -181,20 +190,27 @@ function CourtsInner() {
                   </div>
 
                   <div className="mt-4 flex gap-2">
-                    <Button variant="outline" size="sm" fullWidth onClick={() => goEdit(c)}>
-                      Edit
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="!text-red-500 hover:!bg-red-50 dark:hover:!bg-red-500/10"
-                      onClick={() => {
-                        deleteCourt(c.id);
-                        toast.info(`${c.name} dihapus`);
-                      }}
-                    >
-                      Hapus
-                    </Button>
+                    {canUpdate && (
+                      <Button variant="outline" size="sm" fullWidth onClick={() => goEdit(c)}>
+                        Edit
+                      </Button>
+                    )}
+                    {canDelete && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="!text-red-500 hover:!bg-red-50 dark:hover:!bg-red-500/10"
+                        onClick={() => {
+                          deleteCourt(c.id);
+                          toast.info(`${c.name} dihapus`);
+                        }}
+                      >
+                        Hapus
+                      </Button>
+                    )}
+                    {!canUpdate && !canDelete && (
+                      <span className="text-xs text-[var(--text-muted)]">Hanya lihat</span>
+                    )}
                   </div>
                 </div>
               </div>

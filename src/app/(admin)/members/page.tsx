@@ -8,6 +8,7 @@ import Tabs from "@/components/ui/tabs/Tabs";
 import StatCard from "@/components/club-core/StatCard";
 import ToneBadge from "@/components/club-core/ToneBadge";
 import { useToast } from "@/components/ui/toast/ToastContext";
+import { useAccess } from "@/context/AccessContext";
 import {
   getMembersAction,
   type MemberRecord,
@@ -34,6 +35,7 @@ const statusMeta: Record<
 
 export default function MembersPage() {
   const toast = useToast();
+  const { can } = useAccess();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [members, setMembers] = useState<MemberRecord[]>([]);
@@ -208,6 +210,8 @@ export default function MembersPage() {
         member={selected}
         isOpen={open}
         onClose={() => setOpen(false)}
+        canUpdate={can("members.data", "update")}
+        canDelete={can("members.data", "delete")}
         onChanged={() => {
           setOpen(false);
           void load();
