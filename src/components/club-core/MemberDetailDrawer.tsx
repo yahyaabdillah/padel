@@ -1,63 +1,135 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Drawer from "@/components/ui/drawer/Drawer";
 import { Avatar } from "@/components/ui/avatar/Avatar";
 import Button from "@/components/ui/button/Button";
+import TextInput from "@/components/ui/input/TextInput";
+import UiSelect from "@/components/ui/select/Select";
+import { ModalDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import ToneBadge from "./ToneBadge";
-import { formatIDR, formatDate, formatDateTime } from "./format";
 import {
-  type Member,
-  memberTierMeta,
-  memberStatusMeta,
-  memberActivityTypeMeta,
-} from "@/data/padel/club/members";
+  type MemberRecord,
+  updateMemberAction,
+  deleteMemberAction,
+} from "@/app/(admin)/members/actions";
 
 interface MemberDetailDrawerProps {
-  member: Member | null;
+  member: MemberRecord | null;
   isOpen: boolean;
   onClose: () => void;
+  /** called after a successful edit/delete so the parent can refresh */
+  onChanged?: () => void;
 }
 
-const Stat = ({ label, value }: { label: string; value: React.ReactNode }) => (
-  <div className="rounded-xl bg-gray-50 p-3 text-center dark:bg-white/[0.03]">
-    <p className="text-lg font-bold text-gray-900 dark:text-white">{value}</p>
-    <p className="text-[11px] uppercase tracking-wide text-gray-400">{label}</p>
-  </div>
-);
+const statusMeta: Record<
+  string,
+  { label: string; tone: "success" | "neutral" | "warning" }
+> = {
+  active: { label: "Aktif", tone: "success" },
+  inactive: { label: "Nonaktif", tone: "neutral" },
+  frozen: { label: "Frozen", tone: "warning" },
+};
 
-const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({ member, isOpen, onClose }) => {
+const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
+  member,
+  isOpen,
+  onClose,
+  onChanged,
+}) => {
   const toast = useToast();
-  if (!member) return <Drawer isOpen={isOpen} onClose={onClose} title="Member" size="max-w-md"><div /></Drawer>;
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const tier = memberTierMeta[member.tier];
-  const status = memberStatusMeta[member.status];
-  const winRate = member.matchesPlayed ? Math.round((member.wins / member.matchesPlayed) * 100) : 0;
+  // edit form state
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [city, setCity] = useState("");
+  const [status, setStatus] = useState("active");
+
+  useEffect(() => {
+    if (member) {
+      setName(member.name);
+      setPhone(member.phone);
+      setEmail(member.email);
+      setCity(member.city ?? "");
+      setStatus(member.status);
+      setEditing(false);
+      setConfirmDelete(false);
+    }
+  }, [member, isOpen]);
+
+  if (!member) {
+    return (
+      <Drawer isOpen={isOpen} onClose={onClose} title="Member" size="max-w-md">
+        <div />
+      </Drawer>
+    );
+  }
+
+  const s = statusMeta[member.status] ?? statusMeta.active;
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    const res = await updateMemberAction(member.id, { name, phone, email, city, status: status as "active" | "inactive" | "frozen" });
+    setSaving(false);
+    if (!res.success) {
+      toast.error(res.error || "Gagal menyimpan perubahan.");
+      return;
+    }
+    toast.success("Data member diperbarui.");
+    onChanged?.();
+  };
+
+  const remove = async () => {
+    if (saving) return;
+    setSaving(true);
+    const res = await deleteMemberAction(member.id);
+    setSaving(false);
+    setConfirmDelete(false);
+    if (!res.success) {
+      toast.error("Gagal menghapus member.");
+      return;
+    }
+    toast.success("Member dihapus.");
+    onChanged?.();
+  };
 
   return (
     <Drawer
       isOpen={isOpen}
       onClose={onClose}
-      title="Member profile"
+      title="Profil Member"
       size="max-w-md"
       footer={
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            fullWidth
-            onClick={() => toast.success(`Wallet top-up link sent to ${member.name}.`, "Top-up")}
-          >
-            Top-up wallet
-          </Button>
-          <Button
-            variant="outline"
-            fullWidth
-            onClick={() => toast.info(`Starting a new booking for ${member.name}.`, "New booking")}
-          >
-            New booking
-          </Button>
-        </div>
+        editing ? (
+          <div className="flex gap-2">
+            <Button variant="outline" fullWidth onClick={() => setEditing(false)} disabled={saving}>
+              Batal
+            </Button>
+            <Button variant="primary" fullWidth sheen onClick={save} disabled={saving}>
+              {saving ? "Menyimpan…" : "Simpan"}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              fullWidth
+              className="!text-red-500 hover:!bg-red-50 dark:hover:!bg-red-500/10"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Hapus
+            </Button>
+            <Button variant="primary" fullWidth sheen onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          </div>
+        )
       }
     >
       <div className="space-y-6">
@@ -66,86 +138,86 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({ member, isOpen,
           <Avatar name={member.name} size="xl" status={member.status === "active" ? "online" : "offline"} />
           <div className="min-w-0">
             <h3 className="truncate text-lg font-bold text-gray-900 dark:text-white">{member.name}</h3>
-            <p className="truncate text-sm text-gray-500 dark:text-gray-400">{member.email}</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              <span
-                className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold text-white"
-                style={{ background: tier.color }}
-              >
-                {tier.label}
+            <p className="truncate text-sm text-gray-500 dark:text-gray-400">@{member.username}</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="rounded-full bg-[var(--surface-muted)] px-2 py-0.5 font-mono text-xs text-gray-600 dark:text-gray-300">
+                {member.memberNo}
               </span>
-              <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
+              <ToneBadge tone={s.tone}>{s.label}</ToneBadge>
             </div>
           </div>
         </div>
 
-        {/* wallet */}
-        <div className="rounded-2xl border border-brand-200 bg-gradient-to-br from-brand-500/10 to-teal-500/10 p-4 dark:border-brand-500/30">
-          <p className="text-xs font-medium text-brand-600 dark:text-brand-300">Wallet balance</p>
-          <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{formatIDR(member.walletBalance)}</p>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{tier.perk}</p>
-        </div>
-
-        {/* stats */}
-        <div className="grid grid-cols-3 gap-2">
-          <Stat label="Rating" value={member.rating} />
-          <Stat label="Bookings" value={member.totalBookings} />
-          <Stat label="Win rate" value={`${winRate}%`} />
-        </div>
-
-        <dl className="space-y-2.5 rounded-xl border border-gray-100 p-4 text-sm dark:border-gray-800">
-          <div className="flex justify-between">
-            <dt className="text-gray-400 dark:text-gray-500">Phone</dt>
-            <dd className="font-medium text-gray-800 dark:text-white/90">{member.phone}</dd>
+        {editing ? (
+          <div className="space-y-4">
+            <TextInput label="Nama Lengkap" value={name} onChange={setName} required />
+            <TextInput label="Nomor Telepon" value={phone} onChange={setPhone} required />
+            <TextInput label="Email" type="email" value={email} onChange={setEmail} validate />
+            <TextInput label="Kota" value={city} onChange={setCity} />
+            <UiSelect
+              label="Status"
+              options={[
+                { value: "active", label: "Aktif" },
+                { value: "inactive", label: "Nonaktif" },
+                { value: "frozen", label: "Frozen" },
+              ]}
+              value={status}
+              clearable={false}
+              onChange={(v) => setStatus(v as string)}
+            />
           </div>
-          <div className="flex justify-between">
-            <dt className="text-gray-400 dark:text-gray-500">City</dt>
-            <dd className="font-medium text-gray-800 dark:text-white/90">{member.city}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-gray-400 dark:text-gray-500">Preferred side</dt>
-            <dd className="font-medium capitalize text-gray-800 dark:text-white/90">{member.position}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-gray-400 dark:text-gray-500">Member since</dt>
-            <dd className="font-medium text-gray-800 dark:text-white/90">{formatDate(member.joinedAt)}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-gray-400 dark:text-gray-500">Lifetime spend</dt>
-            <dd className="font-semibold text-brand-600 dark:text-brand-400">{formatIDR(member.totalSpend)}</dd>
-          </div>
-        </dl>
-
-        {/* history */}
-        <div>
-          <h4 className="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">Recent activity</h4>
-          <ol className="relative space-y-4 border-l border-gray-200 pl-4 dark:border-gray-700">
-            {member.history.map((h) => {
-              const meta = memberActivityTypeMeta[h.type];
-              return (
-                <li key={h.id} className="relative">
-                  <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-brand-500 ring-4 ring-white dark:ring-gray-900" />
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-gray-800 dark:text-white/90">{h.label}</p>
-                    {h.amount !== undefined && (
-                      <span
-                        className={`text-sm font-semibold ${h.amount < 0 ? "text-emerald-600 dark:text-emerald-400" : "text-gray-700 dark:text-gray-200"}`}
-                      >
-                        {h.amount < 0 ? "+" : ""}
-                        {formatIDR(Math.abs(h.amount))}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-2">
-                    <ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>
-                    <span className="text-xs text-gray-400 dark:text-gray-500">{formatDateTime(h.date)}</span>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
+        ) : (
+          <dl className="space-y-2.5 rounded-xl border border-gray-100 p-4 text-sm dark:border-gray-800">
+            <div className="flex justify-between">
+              <dt className="text-gray-400 dark:text-gray-500">Telepon</dt>
+              <dd className="font-medium text-gray-800 dark:text-white/90">{member.phone}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-gray-400 dark:text-gray-500">Email</dt>
+              <dd className="font-medium text-gray-800 dark:text-white/90">{member.email || "—"}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-gray-400 dark:text-gray-500">Kota</dt>
+              <dd className="font-medium text-gray-800 dark:text-white/90">{member.city || "—"}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-gray-400 dark:text-gray-500">Username login</dt>
+              <dd className="font-mono font-medium text-gray-800 dark:text-white/90">{member.username}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-gray-400 dark:text-gray-500">Terdaftar</dt>
+              <dd className="font-medium text-gray-800 dark:text-white/90">{member.createdAt.slice(0, 10)}</dd>
+            </div>
+          </dl>
+        )}
       </div>
+
+      <ModalDialog
+        isOpen={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title="Hapus member?"
+        description={`${member.name} (${member.memberNo}) akan dihapus. Data tetap tersimpan untuk audit (soft delete).`}
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmDelete(false)} disabled={saving}>
+              Batal
+            </Button>
+            <Button
+              variant="primary"
+              className="!bg-red-500 hover:!bg-red-600"
+              onClick={remove}
+              disabled={saving}
+            >
+              {saving ? "Menghapus…" : "Ya, hapus"}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-[var(--text-caption)]">
+          Tindakan ini menonaktifkan member dari daftar. Booking & riwayat tetap tersimpan.
+        </p>
+      </ModalDialog>
     </Drawer>
   );
 };

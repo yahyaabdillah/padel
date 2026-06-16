@@ -10,9 +10,11 @@ function PaymentInner() {
   const params = useSearchParams();
   const court = params.get("court") ?? "";
   const date = params.get("date") ?? "";
-  const startSlot = Number(params.get("slot") ?? "0");
-  const duration = Number(params.get("duration") ?? "60");
-  const price = Number(params.get("price") ?? "0");
+  // multi-select: comma-separated storage-slot indices (e.g. "14,15,18")
+  const slots = (params.get("slots") ?? "")
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n));
   const member = params.get("member") ?? "";
 
   return (
@@ -22,9 +24,7 @@ function PaymentInner() {
         <BookingPayment
           courtId={court}
           dateKey={date}
-          startSlot={startSlot}
-          durationMinutes={duration}
-          price={price}
+          startSlots={slots}
           memberId={member}
         />
       </div>

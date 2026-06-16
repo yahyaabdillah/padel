@@ -1,33 +1,36 @@
 "use client";
 
-// PadelHub — quick "add member" modal used inside the New Booking flow.
-// Minimal fields (nama, telepon, email, tier) so front-desk can register a new
-// member on the spot without leaving the booking screen. Returns the created
-// Member to the caller.
+// PadelHub — quick "register member" modal used inside the New Booking flow.
+// Minimal fields (nama, username, password, telepon, email) so front-desk can
+// register a login-capable member on the spot without leaving the booking
+// screen. Persists to the tenant DB via registerMemberAction. No membership
+// tier — tier economics are deferred. Returns the created Member to the caller.
 
 import React, { useEffect, useState } from "react";
 import { ModalDialog } from "@/components/ui/modal";
 import Button from "@/components/ui/button/Button";
 import TextInput from "@/components/ui/input/TextInput";
 import PhoneInput, { type Country } from "@/components/ui/input/PhoneInput";
-import InputLabel from "@/components/ui/input/InputLabel";
+import { useToast } from "@/components/ui/toast/ToastContext";
 import countriesData from "@/data/countries.json";
-import {
-  type Member,
-  type MemberTier,
-  memberTierMeta,
-} from "@/data/padel/club/members";
+import { registerMemberAction } from "@/app/(admin)/members/actions";
 
 const countries = countriesData as Country[];
 
-const registrableTiers: MemberTier[] = ["casual", "pro", "elite", "daily"];
+/** Lightweight member returned to the caller after a successful register. */
+export interface CreatedMember {
+  id: string;
+  name: string;
+  phone: string;
+  tier: string;
+}
 
 interface QuickAddMemberModalProps {
   isOpen: boolean;
   onClose: () => void;
   /** prefilled name typed in the member search */
   initialName?: string;
-  onCreated: (member: Member) => void;
+  onCreated: (member: CreatedMember) => void;
 }
 
 const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
@@ -36,66 +39,63 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
   initialName = "",
   onCreated,
 }) => {
+  const toast = useToast();
   const [name, setName] = useState(initialName);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [tier, setTier] = useState<MemberTier>("casual");
   const [submitted, setSubmitted] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // suggest a username from the typed name
+  const suggestUsername = (n: string) =>
+    n.trim().toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 20);
 
   useEffect(() => {
     if (isOpen) {
       setName(initialName);
+      setUsername(suggestUsername(initialName));
+      setPassword("");
       setPhone("");
       setEmail("");
-      setTier("casual");
       setSubmitted(false);
+      setSaving(false);
     }
   }, [isOpen, initialName]);
 
   const nameValid = name.trim().length >= 2;
+  const usernameValid = username.trim().length >= 3;
+  const passwordValid = password.length >= 6;
   const phoneValid = phone.replace(/\D/g, "").length >= 8;
-  const canSubmit = nameValid && phoneValid;
+  const canSubmit = nameValid && usernameValid && passwordValid && phoneValid;
 
-  const create = () => {
+  const create = async () => {
     setSubmitted(true);
-    if (!canSubmit) return;
+    if (!canSubmit || saving) return;
+    setSaving(true);
 
-    const id = `mbr-new-${Date.now().toString(36)}`;
-    const nowIso = new Date().toISOString();
-    const member: Member = {
-      id,
+    const res = await registerMemberAction({
       name: name.trim(),
-      email: email.trim(),
+      username: username.trim().toLowerCase(),
+      password,
       phone,
-      avatar: "/images/user/user-01.jpg",
-      tier,
-      status: "active",
-      walletBalance: 0,
-      rating: 1000,
-      position: "both",
-      joinedAt: nowIso.slice(0, 10),
-      lastVisit: nowIso.slice(0, 10),
-      totalBookings: 0,
-      totalSpend: 0,
-      matchesPlayed: 0,
-      wins: 0,
-      city: "",
-      history: [],
-      onboarded: false,
-      isDaily: tier === "daily",
-    };
+      email: email.trim() || undefined,
+    });
 
-    // persist to localStorage so the new member survives a refresh
-    try {
-      const KEY = "padelhub-club-members";
-      const prev = JSON.parse(window.localStorage.getItem(KEY) || "[]");
-      prev.push(member);
-      window.localStorage.setItem(KEY, JSON.stringify(prev));
-    } catch {
-      /* ignore */
+    if (!res.success || !res.memberNo || !res.id) {
+      toast.error(res.error || "Gagal mendaftarkan member.", "Registrasi gagal");
+      setSaving(false);
+      return;
     }
 
-    onCreated(member);
+    toast.success(`${name.trim()} terdaftar (${res.memberNo}).`, "Member baru");
+    onCreated({
+      id: res.id,
+      name: name.trim(),
+      phone,
+      tier: "daily",
+    });
     onClose();
   };
 
@@ -103,16 +103,16 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
     <ModalDialog
       isOpen={isOpen}
       onClose={onClose}
-      title="Tambah Member Baru"
-      description="Daftar cepat member untuk melanjutkan booking."
+      title="Register Member Baru"
+      description="Daftar cepat member (bisa login) untuk melanjutkan booking."
       size="md"
       footer={
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
             Batal
           </Button>
-          <Button variant="primary" sheen onClick={create}>
-            Simpan & Pilih
+          <Button variant="primary" sheen onClick={create} disabled={saving}>
+            {saving ? "Menyimpan…" : "Simpan & Pilih"}
           </Button>
         </div>
       }
@@ -122,12 +122,41 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
           label="Nama Lengkap"
           labelInfo="Nama member yang tampil di booking, kalender & struk."
           value={name}
-          onChange={setName}
+          onChange={(v) => {
+            setName(v);
+            if (!username || username === suggestUsername(name)) {
+              setUsername(suggestUsername(v));
+            }
+          }}
           placeholder="cth. Andi Wijaya"
           required
           error={submitted && !nameValid}
           errorText="Nama minimal 2 karakter"
         />
+
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+          <TextInput
+            label="Username"
+            labelInfo="Username untuk login member. Huruf kecil tanpa spasi."
+            value={username}
+            onChange={(v) => setUsername(v.toLowerCase().replace(/\s+/g, ""))}
+            placeholder="cth. andiwijaya"
+            required
+            error={submitted && !usernameValid}
+            errorText="Username minimal 3 karakter"
+          />
+          <TextInput
+            label="Password"
+            labelInfo="Password awal untuk login member. Minimal 6 karakter."
+            type="password"
+            value={password}
+            onChange={setPassword}
+            placeholder="Minimal 6 karakter"
+            required
+            error={submitted && !passwordValid}
+            errorText="Password minimal 6 karakter"
+          />
+        </div>
 
         <PhoneInput
           label="Nomor Telepon"
@@ -146,49 +175,13 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
 
         <TextInput
           label="Email (opsional)"
-          labelInfo="Untuk login member portal & notifikasi email. Boleh dikosongkan."
+          labelInfo="Untuk notifikasi email. Boleh dikosongkan."
           type="email"
           value={email}
           onChange={setEmail}
           placeholder="cth. andi@email.com"
           validate
         />
-
-        <div>
-          <InputLabel
-            label="Tier Membership"
-            tooltip="Daily = walk-in bayar per sesi. Casual/Pro/Elite untuk member terdaftar dengan benefit berbeda."
-          />
-          <div className="grid grid-cols-2 gap-2">
-            {registrableTiers.map((t) => {
-              const meta = memberTierMeta[t];
-              const active = t === tier;
-              return (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => setTier(t)}
-                  className={[
-                    "rounded-xl border px-3 py-2.5 text-left transition-all",
-                    active
-                      ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
-                      : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
-                  ].join(" ")}
-                >
-                  <span
-                    className="inline-block rounded-full px-2 py-0.5 text-xs font-semibold text-white"
-                    style={{ background: meta.color }}
-                  >
-                    {meta.label}
-                  </span>
-                  <p className="mt-1.5 text-xs text-[var(--text-caption)]">
-                    {meta.perk}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        </div>
       </div>
     </ModalDialog>
   );

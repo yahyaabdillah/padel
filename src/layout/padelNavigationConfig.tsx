@@ -238,6 +238,7 @@ export const clubNav: NavItem[] = [
     group: "others",
     subItems: [
       { name: "Lapangan", path: "/courts", requiredAny: ["courts.view"] },
+      { name: "Maintenance Lapangan", path: "/maintenance", requiredAny: ["courts.view"] },
       { name: "Jam Operasional", path: "/settings/hours", requiredAny: ["settings.view"] },
       // { name: "Membership Plan", path: "/settings/plans", requiredAny: ["settings.view"] },
       // { name: "Product", path: "/pos", requiredAny: ["pos.view"] },

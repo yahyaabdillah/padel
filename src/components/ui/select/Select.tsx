@@ -35,6 +35,8 @@ interface SelectProps {
   onAddOption?: (label: string) => void;
   /** Jika diisi, klik "Tambah" akan memanggil handler ini (mis. buka modal) alih-alih langsung menambah opsi */
   onAddClick?: (label: string) => void;
+  /** Prefix kata untuk tombol tambah (default "Tambah", mis. "Register") */
+  addLabelPrefix?: string;
 }
 
 const ChevronIcon = ({ open }: { open: boolean }) => (
@@ -76,6 +78,7 @@ const Select: React.FC<SelectProps> = ({
   className = "",
   onAddOption,
   onAddClick,
+  addLabelPrefix = "Tambah",
 }) => {
   const [options, setOptions] = useState<SelectOption[]>(initialOptions);
   const [open, setOpen] = useState(false);
@@ -314,7 +317,7 @@ const Select: React.FC<SelectProps> = ({
                     className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-[var(--color-primary)] hover:bg-[var(--surface-muted)]"
                   >
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                    Tambah &quot;{search.trim()}&quot;
+                    {addLabelPrefix} &quot;{search.trim()}&quot;
                   </button>
                 )}
                 {filtered.map((option) => {

@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
+import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";
 
@@ -31,8 +32,8 @@ export async function getCourtsAction(): Promise<Court[]> {
   const db = await getTenantDb();
 
   const rows = await db.m_court.findMany({
-    where: { companyId: session.companyId, isdeleted: 0 },
-    orderBy: { created: "asc" },
+    where: { companyId: session.companyId, isDeleted: 0 },
+    orderBy: { createdAt: "asc" },
   });
 
   return rows.map((r) => ({
@@ -60,7 +61,7 @@ export async function getCourtByIdAction(id: string): Promise<Court | null> {
   const db = await getTenantDb();
 
   const row = await db.m_court.findFirst({
-    where: { id, companyId: session.companyId, isdeleted: 0 },
+    where: { id, companyId: session.companyId, isDeleted: 0 },
   });
 
   if (!row) return null;
@@ -105,6 +106,7 @@ export async function createCourtAction(
       color: data.color,
       note: data.note,
       image: data.image,
+      ...auditCreate(session.userId),
     },
   });
 
@@ -124,7 +126,7 @@ export async function updateCourtAction(
   const db = await getTenantDb();
 
   await db.m_court.updateMany({
-    where: { id, companyId: session.companyId, isdeleted: 0 },
+    where: { id, companyId: session.companyId, isDeleted: 0 },
     data: {
       ...(data.name !== undefined && { name: data.name }),
       ...(data.environment !== undefined && { environment: data.environment }),
@@ -137,6 +139,7 @@ export async function updateCourtAction(
       ...(data.color !== undefined && { color: data.color }),
       ...(data.note !== undefined && { note: data.note }),
       ...(data.image !== undefined && { image: data.image }),
+      updatedBy: session.userId,
     },
   });
 
@@ -153,8 +156,8 @@ export async function deleteCourtAction(id: string): Promise<{ success: boolean 
   const db = await getTenantDb();
 
   await db.m_court.updateMany({
-    where: { id, companyId: session.companyId, isdeleted: 0 },
-    data: { isdeleted: 1 },
+    where: { id, companyId: session.companyId, isDeleted: 0 },
+    data: { isDeleted: 1, deletedAt: new Date(), deletedBy: session.userId },
   });
 
   revalidatePath("/courts");

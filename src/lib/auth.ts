@@ -18,7 +18,7 @@ export async function getActiveVersion(): Promise<string> {
   try {
     const v = await masterPrisma.m_version.findFirst({
       where: { isActive: true },
-      orderBy: { created: "desc" },
+      orderBy: { createdAt: "desc" },
     });
     return v?.versionName || "v1";
   } catch {
@@ -69,10 +69,49 @@ export async function authenticateCustom(
       companyId: company,
       userId: userId.trim().toLowerCase(),
       isActive: true,
-      isdeleted: 0,
+      isDeleted: 0,
     },
   });
-  if (!user || !user.passwordHash) return null;
+
+  // ── No internal user? Try the member portal (separate m_member table). ──
+  if (!user) {
+    const member = await tenantDb.m_member.findFirst({
+      where: {
+        companyId: company,
+        username: userId.trim().toLowerCase(),
+        status: "active",
+        isDeleted: 0,
+      },
+    });
+    if (!member || !member.passwordHash) return null;
+    const memberOk = await bcrypt.compare(password, member.passwordHash);
+    if (!memberOk) return null;
+
+    const memberLevel = await resolveRoleLevel("member");
+    const memberVersion = await getActiveVersion();
+    try {
+      await tenantDb.m_member.update({
+        where: { id: member.id },
+        data: { lastLogin: new Date() },
+      });
+    } catch {
+      /* ignore */
+    }
+    return {
+      companyId: company,
+      userId: member.username,
+      role: "member",
+      displayName: member.name || member.username,
+      id: member.id,
+      email: member.email || undefined,
+      photo: member.avatar || undefined,
+      level: memberLevel,
+      version: memberVersion,
+      dbConfig: cfg,
+    };
+  }
+
+  if (!user.passwordHash) return null;
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return null;

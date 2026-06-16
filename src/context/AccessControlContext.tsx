@@ -25,7 +25,7 @@ type RolePermMap = Record<UserRole, string[]>;
 type RoleMenuMap = Record<UserRole, string[]>;
 
 const STORAGE_KEY_PERMS = "padelhub-rbac-role-perms";
-const STORAGE_KEY_MENUS = "padelhub-rbac-role-menus-v6";
+const STORAGE_KEY_MENUS = "padelhub-rbac-role-menus-v7";
 
 function buildDefaultPermMap(): RolePermMap {
   return ALL_ROLES.reduce((acc, role) => {

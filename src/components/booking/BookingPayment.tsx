@@ -1,11 +1,12 @@
 "use client";
 
-// PadelHub — booking payment step. Reached after picking a slot + member in the
-// New Booking search flow. Reads the pending booking from URL params, shows a
-// payment summary + method picker, and on confirm creates the booking via
-// useClubData.addBooking and shows a receipt.
+// PadelHub — booking payment step. Reached after picking a court + one or more
+// hourly slots + a member in the New Booking search flow. Reads the pending
+// booking from URL params (slots = comma-separated storage-slot indices), shows
+// a payment summary + method picker, and on confirm creates one 60-min booking
+// per selected slot via useClubData.addBooking, then shows a receipt.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import Card from "@/components/ui/card/Card";
@@ -13,108 +14,157 @@ import Button from "@/components/ui/button/Button";
 import TextInput from "@/components/ui/input/TextInput";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { useClubData } from "@/components/club-core/ClubDataContext";
+import {
+  createBookingsAction,
+  getMemberByIdAction,
+  type BookingMember,
+} from "@/app/(admin)/bookings/actions";
 import ToneBadge from "@/components/club-core/ToneBadge";
 import { formatIDR } from "@/components/club-core/format";
 import {
   courtById as seedCourtById,
   STORAGE_SLOT_MINUTES,
   slotLabel,
+  courtRateAtSlot,
+  type Court,
 } from "@/data/padel/club/courts";
-import {
-  mockMembers,
-  memberTierMeta,
-  type Member,
-} from "@/data/padel/club/members";
 import { paymentMethods, type PaymentMethod } from "@/data/padel/engage/products";
 
 const pad = (n: number) => String(n).padStart(2, "0");
-const LS_MEMBERS = "padelhub-club-members";
+
+/** Sessions are fixed at 60 minutes. */
+const SESSION_MINUTES = 60;
+const SLOTS_PER_SESSION = SESSION_MINUTES / STORAGE_SLOT_MINUTES; // 2
 
 interface BookingPaymentProps {
   courtId: string;
   dateKey: string;
-  startSlot: number;
-  durationMinutes: number;
-  price: number;
+  /** storage-slot indices (0–47), one per chosen 60-min session */
+  startSlots: number[];
   memberId: string;
 }
+
+/** Price (IDR) for a single 60-min session starting at `startSlot`. */
+const sessionPrice = (court: Court, day: number, startSlot: number): number => {
+  let total = 0;
+  for (let i = 0; i < SLOTS_PER_SESSION; i++) {
+    const rate = courtRateAtSlot(court, day, startSlot + i);
+    total += (rate === "peak" ? court.pricePeak : court.priceOffPeak) / 2;
+  }
+  return Math.round(total);
+};
 
 export default function BookingPayment({
   courtId,
   dateKey: bookingDate,
-  startSlot,
-  durationMinutes,
-  price,
+  startSlots,
   memberId,
 }: BookingPaymentProps) {
   const router = useRouter();
   const toast = useToast();
-  const { courts, addBooking, isReady } = useClubData();
+  const { courts, isReady } = useClubData();
 
   const court = useMemo(
     () => courts.find((c) => c.id === courtId) ?? seedCourtById(courtId),
     [courts, courtId],
   );
 
-  // resolve member from seed or locally-created list
-  const member = useMemo<Member | undefined>(() => {
-    const seed = mockMembers.find((m) => m.id === memberId);
-    if (seed) return seed;
-    try {
-      const raw = window.localStorage.getItem(LS_MEMBERS);
-      if (raw) {
-        const list = JSON.parse(raw) as Member[];
-        return list.find((m) => m.id === memberId);
+  // resolve member live from the tenant DB
+  const [member, setMember] = useState<BookingMember | null>(null);
+  const [memberLoaded, setMemberLoaded] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const m = await getMemberByIdAction(memberId);
+        setMember(m);
+      } catch {
+        setMember(null);
+      } finally {
+        setMemberLoaded(true);
       }
-    } catch {
-      /* ignore */
-    }
-    return undefined;
+    })();
   }, [memberId]);
 
   const [method, setMethod] = useState<PaymentMethod>("QRIS");
   const [cash, setCash] = useState("");
   const [confirmedRef, setConfirmedRef] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const endSlot = startSlot + Math.ceil(durationMinutes / STORAGE_SLOT_MINUTES);
-  const startLabel = slotLabel(startSlot);
-  const endLabel = slotLabel(endSlot);
+  const day = useMemo(
+    () => new Date(`${bookingDate}T00:00:00`).getDay(),
+    [bookingDate],
+  );
+
+  // sorted sessions with labels + per-session price
+  const sessions = useMemo(() => {
+    if (!court) return [];
+    return [...startSlots]
+      .sort((a, b) => a - b)
+      .map((startSlot) => {
+        const endSlot = startSlot + SLOTS_PER_SESSION;
+        return {
+          startSlot,
+          endSlot,
+          startLabel: slotLabel(startSlot),
+          endLabel: slotLabel(endSlot),
+          price: sessionPrice(court, day, startSlot),
+        };
+      });
+  }, [court, startSlots, day]);
+
+  const totalPrice = useMemo(
+    () => sessions.reduce((sum, s) => sum + s.price, 0),
+    [sessions],
+  );
 
   const cashNum = parseInt(cash.replace(/\D/g, ""), 10) || 0;
-  const change = method === "Cash" ? cashNum - price : 0;
-  const cashShort = method === "Cash" && cashNum < price;
+  const change = method === "Cash" ? cashNum - totalPrice : 0;
+  const cashShort = method === "Cash" && cashNum < totalPrice;
 
-  const pay = () => {
-    if (!court || !member) return;
+  const pay = async () => {
+    if (!court || !member || sessions.length === 0 || saving) return;
     if (cashShort) {
       toast.warning("Uang tunai kurang dari total.");
       return;
     }
-    const startH = Math.floor(startSlot / 2);
-    const startM = (startSlot % 2) * 30;
-    const endH = Math.floor(endSlot / 2);
-    const endM = (endSlot % 2) * 30;
-    const startIso = `${bookingDate}T${pad(startH)}:${pad(startM)}:00`;
-    const endIso = `${bookingDate}T${pad(endH)}:${pad(endM)}:00`;
+    setSaving(true);
 
-    const created = addBooking({
-      courtId: court.id,
-      start: startIso,
-      end: endIso,
-      type: member.tier === "daily" ? "walk_in" : "member",
-      status: "confirmed",
-      customer: member.name,
-      memberId: member.id,
-      partySize: court.format === "single" ? 2 : 4,
-      price,
-      note: `Dibayar via ${method}`,
-      createdBy: "Front desk",
+    const payload = sessions.map((s) => {
+      const startH = Math.floor(s.startSlot / 2);
+      const startM = (s.startSlot % 2) * 30;
+      const endH = Math.floor(s.endSlot / 2);
+      const endM = (s.endSlot % 2) * 30;
+      return {
+        courtId: court.id,
+        memberId: member.id,
+        type: (member.tier === "daily" ? "walk_in" : "member") as
+          | "walk_in"
+          | "member",
+        status: "confirmed" as const,
+        customer: member.name,
+        start: `${bookingDate}T${pad(startH)}:${pad(startM)}:00`,
+        end: `${bookingDate}T${pad(endH)}:${pad(endM)}:00`,
+        partySize: court.format === "single" ? 2 : 4,
+        price: s.price,
+        note: `Dibayar via ${method}`,
+      };
     });
-    setConfirmedRef(created.id);
-    toast.success(`Pembayaran ${formatIDR(price)} diterima.`, "Booking dikonfirmasi");
+
+    const res = await createBookingsAction(payload);
+    if (!res.success || !res.ids?.length) {
+      toast.error(res.error || "Gagal menyimpan booking.", "Pembayaran gagal");
+      setSaving(false);
+      return;
+    }
+
+    setConfirmedRef(res.ids[0]);
+    toast.success(
+      `Pembayaran ${formatIDR(totalPrice)} diterima.`,
+      `${sessions.length} booking dikonfirmasi`,
+    );
   };
 
-  if (!isReady) {
+  if (!isReady || !memberLoaded) {
     return (
       <Card padding="lg">
         <div className="space-y-4">
@@ -125,7 +175,7 @@ export default function BookingPayment({
     );
   }
 
-  if (!court || !member) {
+  if (!court || !member || sessions.length === 0) {
     return (
       <Card padding="lg">
         <div className="py-10 text-center">
@@ -151,10 +201,12 @@ export default function BookingPayment({
             <Check className="h-7 w-7" strokeWidth={2.5} />
           </div>
           <h3 className="text-lg font-semibold text-[var(--text-heading)]">
-            Booking dikonfirmasi
+            {sessions.length > 1
+              ? `${sessions.length} booking dikonfirmasi`
+              : "Booking dikonfirmasi"}
           </h3>
           <p className="mt-1 text-sm text-[var(--text-caption)]">
-            {court.name} · {bookingDate} · {startLabel}–{endLabel} — ref{" "}
+            {court.name} · {bookingDate} · {sessions.length} jam — ref{" "}
             <span className="font-mono font-semibold">{confirmedRef}</span>
           </p>
           <div className="mx-auto mt-5 max-w-xs rounded-xl border border-[var(--border-default)] bg-[var(--surface-muted)] p-4 text-left text-sm">
@@ -163,12 +215,18 @@ export default function BookingPayment({
               <span className="font-medium text-[var(--text-heading)]">{member.name}</span>
             </div>
             <div className="mt-1.5 flex justify-between">
+              <span className="text-[var(--text-caption)]">Jam</span>
+              <span className="text-right font-medium text-[var(--text-heading)]">
+                {sessions.map((s) => `${s.startLabel}–${s.endLabel}`).join(", ")}
+              </span>
+            </div>
+            <div className="mt-1.5 flex justify-between">
               <span className="text-[var(--text-caption)]">Metode</span>
               <span className="font-medium text-[var(--text-heading)]">{method}</span>
             </div>
             <div className="mt-1.5 flex justify-between">
               <span className="text-[var(--text-caption)]">Total</span>
-              <span className="font-semibold text-[var(--text-heading)]">{formatIDR(price)}</span>
+              <span className="font-semibold text-[var(--text-heading)]">{formatIDR(totalPrice)}</span>
             </div>
             {method === "Cash" && (
               <div className="mt-1.5 flex justify-between">
@@ -245,8 +303,8 @@ export default function BookingPayment({
             <Button variant="outline" onClick={() => router.push("/bookings/search")}>
               Kembali
             </Button>
-            <Button variant="primary" sheen glow onClick={pay}>
-              {`Bayar · ${formatIDR(price)}`}
+            <Button variant="primary" sheen glow onClick={pay} disabled={saving}>
+              {saving ? "Menyimpan…" : `Bayar · ${formatIDR(totalPrice)}`}
             </Button>
           </div>
         </Card>
@@ -260,22 +318,37 @@ export default function BookingPayment({
               <span className="text-sm font-semibold text-[var(--text-heading)]">
                 Ringkasan booking
               </span>
-              <ToneBadge tone={member.tier === "daily" ? "warning" : "primary"}>
-                {memberTierMeta[member.tier].label}
-              </ToneBadge>
+              <ToneBadge tone="primary">Member</ToneBadge>
             </div>
             <dl className="space-y-2.5 text-sm">
               <Row label="Lapangan" value={court.name} />
               <Row label="Tanggal" value={bookingDate} />
-              <Row label="Jam" value={`${startLabel}–${endLabel}`} />
-              <Row label="Durasi" value={`${durationMinutes} menit`} />
               <Row label="Member" value={member.name} />
             </dl>
 
+            {/* per-session breakdown */}
+            <div className="mt-3 space-y-1.5 border-t border-[var(--border-default)] pt-3">
+              {sessions.map((s) => (
+                <div
+                  key={s.startSlot}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <span className="text-[var(--text-caption)]">
+                    {s.startLabel}–{s.endLabel}
+                  </span>
+                  <span className="font-medium text-[var(--text-heading)]">
+                    {formatIDR(s.price)}
+                  </span>
+                </div>
+              ))}
+            </div>
+
             <div className="mt-4 border-t border-[var(--border-default)] pt-4">
-              <p className="text-sm text-[var(--text-caption)]">Total bayar</p>
+              <p className="text-sm text-[var(--text-caption)]">
+                Total bayar · {sessions.length} jam
+              </p>
               <p className="mt-1 text-3xl font-bold text-brand-600 dark:text-brand-400">
-                {formatIDR(price)}
+                {formatIDR(totalPrice)}
               </p>
             </div>
           </Card>

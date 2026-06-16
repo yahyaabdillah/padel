@@ -1,6 +1,15 @@
 // PadelHub — TENANT (per-club) database schema
-// Holds the club's own users (auth subjects) and — later — business data
-// (bookings, members, courts, finance, ...). This session scaffolds m_user only.
+// Holds the club's own internal users (staff/owner/coach auth) plus business
+// data: members, courts, operating hours, bookings.
+//
+// AUDIT CONVENTION (every model):
+//   createdAt / createdBy · updatedAt / updatedBy · deletedAt / deletedBy
+//   isDeleted (0 = live, 1 = soft-deleted). Never hard-delete: set isDeleted=1
+//   and stamp deletedAt/deletedBy instead.
+//
+// MEMBERS are deliberately a SEPARATE table from internal users (m_user). Both
+// can log in, but members are customers (CRM + member portal) while m_user are
+// internal team (owner/staff/coach/superadmin).
 
 generator client {
   provider = "prisma-client-js"
@@ -12,39 +21,53 @@ datasource db {
   url      = env("TENANT_DATABASE_URL")
 }
 
-/// A login subject inside a tenant. Role is resolved against the MASTER database
-/// via roleKey (canonical lowercase role identifier).
+/// An INTERNAL login subject inside a tenant (owner / staff / coach / superadmin).
+/// Role is resolved against the MASTER database via roleKey.
 model m_user {
   id           String    @id @default(uuid()) @db.Uuid
   companyId    String    @db.VarChar(50) // matches m_tenant.companyId in master
   userId       String    @db.VarChar(100) // login username (lowercase)
   passwordHash String    @db.Text
-  roleKey      String    @db.VarChar(50) // superadmin|owner|staff|coach|member
+  roleKey      String    @db.VarChar(50) // superadmin|owner|staff|coach
   namalengkap  String?   @db.VarChar(255)
   email        String?   @db.VarChar(150)
   phone        String?   @db.VarChar(30)
   photo        String?   @db.VarChar(255)
   isActive     Boolean   @default(true)
-  isdeleted    Int       @default(0)
   lastLogin    DateTime? @db.Timestamp(0)
-  created      DateTime  @default(now()) @db.Timestamp(0)
-  modified     DateTime  @updatedAt @db.Timestamp(0)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
 
   @@unique([companyId, userId])
   @@index([userId])
   @@index([roleKey])
+  @@index([isDeleted])
 }
 
 /// Operating hours master — club's open window per weekday (7 rows, day 0–6).
-/// Fixed at 60-minute booking slots (no 30/60 toggle).
 model m_operating_hours {
-  id        Int      @id @default(autoincrement())
-  companyId String   @db.VarChar(50)
+  id        Int     @id @default(autoincrement())
+  companyId String  @db.VarChar(50)
   day       Int // 0 = Sunday … 6 = Saturday
-  open      Boolean  @default(true)
-  openStart Int      @default(7) // hour 0–23
-  openEnd   Int      @default(23) // hour 1–24
-  modified  DateTime @updatedAt @db.Timestamp(0)
+  open      Boolean @default(true)
+  openStart Int     @default(7) // hour 0–23
+  openEnd   Int     @default(23) // hour 1–24
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
 
   @@unique([companyId, day])
   @@index([companyId])
@@ -52,94 +75,147 @@ model m_operating_hours {
 
 /// Court master — padel courts owned by this tenant/club.
 model m_court {
-  id           String   @id @default(uuid()) @db.Uuid
-  companyId    String   @db.VarChar(50)
-  name         String   @db.VarChar(100)
-  environment  String   @db.VarChar(20) // indoor, outdoor
-  wall         String   @db.VarChar(20) // glass, mesh
-  format       String   @db.VarChar(20) // single, double
-  status       String   @default("active") @db.VarChar(20) // active, maintenance, inactive
+  id           String  @id @default(uuid()) @db.Uuid
+  companyId    String  @db.VarChar(50)
+  name         String  @db.VarChar(100)
+  environment  String  @db.VarChar(20) // indoor, outdoor
+  wall         String  @db.VarChar(20) // glass, mesh
+  format       String  @db.VarChar(20) // single, double
+  status       String  @default("active") @db.VarChar(20) // active, maintenance, inactive
   priceOffPeak Int // IDR per hour (off-peak/normal)
   pricePeak    Int // IDR per hour (peak)
   /// DaySchedule[] JSON: [{day:0, available:true, slots:["regular","peak",...]}, ...]
-  /// 7 entries, 48 slots each (30-min storage resolution).
+  /// 7 entries, 48 slots each (30-min storage resolution). "closed" slots are
+  /// outside operating hours; day-off is handled by the Maintenance module.
   schedule     Json
-  color        String   @default("#6D5BFF") @db.VarChar(20)
-  note         String?  @db.Text
-  image        String?  @db.VarChar(255)
-  isdeleted    Int      @default(0)
-  created      DateTime @default(now()) @db.Timestamp(0)
-  modified     DateTime @updatedAt @db.Timestamp(0)
+  color        String  @default("#6D5BFF") @db.VarChar(20)
+  note         String? @db.Text
+  image        String? @db.VarChar(255)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  bookings m_booking[]
+  maintenances m_court_maintenance[]
 
   @@index([companyId])
   @@index([status])
+  @@index([isDeleted])
 }
 
-/// Club member (player CRM). Registered at the front desk. Membership tier and
-/// coaching are NOT implemented yet (hidden in the UI this session): every new
-/// member is created as a plain registrant. There is NO payment at registration
-/// — money only changes hands when the member books a court (see m_booking).
+/// Club member (player CRM) AND a login subject for the member portal.
+/// Registered at the front desk / register page. Membership tier and coaching
+/// are NOT implemented yet: every new member is a plain registrant with tier
+/// "daily". Registration is FREE (no payment) — money only changes hands when
+/// the member books a court (see m_booking).
 model m_member {
-  id            String    @id @default(uuid()) @db.Uuid
-  companyId     String    @db.VarChar(50)
-  memberNo      String    @db.VarChar(40) // PHB-2026-xxxx / PHB-DAY-xxx
-  name          String    @db.VarChar(255)
-  phone         String    @db.VarChar(30)
-  email         String?   @db.VarChar(150)
-  /// daily|casual|pro|elite — tier economics are deferred; defaults to "daily".
-  tier          String    @default("daily") @db.VarChar(20)
-  status        String    @default("active") @db.VarChar(20) // active|inactive|frozen
-  /// one-time daily walk-in (books & pays like a normal customer)
-  isDaily       Boolean   @default(false)
-  /// finished the first-login onboarding stepper (padel profile)
-  onboarded     Boolean   @default(false)
-  /// flagged "interested in coaching" at registration (coaching itself deferred)
-  coachingInterest Boolean @default(false)
-  city          String?   @db.VarChar(100)
-  avatar        String?   @db.VarChar(255)
-  /// temp password handed out at registration (plain until first login)
-  tempPassword  String?   @db.VarChar(40)
-  isdeleted     Int       @default(0)
-  created       DateTime  @default(now()) @db.Timestamp(0)
-  modified      DateTime  @updatedAt @db.Timestamp(0)
+  id           String  @id @default(uuid()) @db.Uuid
+  companyId    String  @db.VarChar(50)
+  memberNo     String  @db.VarChar(40) // PHB-2026-xxxx
+  /// login username for the member portal (lowercase, unique per tenant)
+  username     String  @db.VarChar(100)
+  /// bcrypt hash; members can log in to the member portal
+  passwordHash String  @db.Text
+  name         String  @db.VarChar(255)
+  phone        String  @db.VarChar(30)
+  email        String? @db.VarChar(150)
+  /// tier economics deferred; always "daily" for now
+  tier         String  @default("daily") @db.VarChar(20)
+  status       String  @default("active") @db.VarChar(20) // active|inactive|frozen
+  city         String? @db.VarChar(100)
+  avatar       String? @db.VarChar(255)
+  onboarded    Boolean @default(false)
+  lastLogin    DateTime? @db.Timestamp(0)
 
-  bookings      m_booking[]
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  bookings m_booking[]
 
   @@unique([companyId, memberNo])
+  @@unique([companyId, username])
   @@index([companyId])
   @@index([phone])
   @@index([status])
+  @@index([isDeleted])
 }
 
-/// A court booking. Created at registration (when a member books a court) or
-/// from the bookings calendar. Payment lives here: `price` is the charged IDR
-/// total (0 when included in a membership quota — quota logic deferred, so for
-/// now everything is charged at the court's rate).
+/// A court booking. Created from the New Booking flow or member registration.
+/// Payment lives here: `price` is the charged IDR total.
 model m_booking {
-  id         String    @id @default(uuid()) @db.Uuid
-  companyId  String    @db.VarChar(50)
-  courtId    String    @db.Uuid
-  memberId   String?   @db.Uuid // null for walk-in / unregistered
-  /// member|walk_in|coaching|event
-  type       String    @default("member") @db.VarChar(20)
-  /// confirmed|pending|checked_in|completed|cancelled
-  status     String    @default("confirmed") @db.VarChar(20)
-  customer   String    @db.VarChar(255) // display label
-  start      DateTime  @db.Timestamp(0)
-  end        DateTime  @db.Timestamp(0)
-  partySize  Int       @default(4)
-  price      Int       @default(0) // IDR total charged for this slot
-  note       String?   @db.Text
-  createdBy  String    @db.VarChar(100)
-  isdeleted  Int       @default(0)
-  created    DateTime  @default(now()) @db.Timestamp(0)
-  modified   DateTime  @updatedAt @db.Timestamp(0)
+  id        String   @id @default(uuid()) @db.Uuid
+  companyId String   @db.VarChar(50)
+  courtId   String   @db.Uuid
+  memberId  String?  @db.Uuid // null for walk-in / unregistered
+  type      String   @default("member") @db.VarChar(20) // member|walk_in|coaching|event
+  status    String   @default("confirmed") @db.VarChar(20) // confirmed|pending|checked_in|completed|cancelled
+  customer  String   @db.VarChar(255) // display label
+  start     DateTime @db.Timestamp(0)
+  end       DateTime @db.Timestamp(0)
+  partySize Int      @default(4)
+  price     Int      @default(0) // IDR total charged for this slot
+  note      String?  @db.Text
 
-  member     m_member? @relation(fields: [memberId], references: [id])
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  court  m_court   @relation(fields: [courtId], references: [id])
+  member m_member? @relation(fields: [memberId], references: [id])
 
   @@index([companyId])
   @@index([courtId])
   @@index([memberId])
   @@index([status])
   @@index([start])
+  @@index([isDeleted])
+}
+
+/// Court maintenance / day-off windows. A court is unavailable for booking
+/// during [start, end). Used to mark holidays, repairs, or one-off closures —
+/// separate from the recurring weekly schedule on m_court.
+model m_court_maintenance {
+  id        String   @id @default(uuid()) @db.Uuid
+  companyId String   @db.VarChar(50)
+  courtId   String   @db.Uuid
+  /// closure window (inclusive start, exclusive end)
+  start     DateTime @db.Timestamp(0)
+  end       DateTime @db.Timestamp(0)
+  /// short reason shown in the UI (e.g. "Ganti net", "Libur nasional")
+  reason    String   @db.VarChar(255)
+  /// maintenance | holiday | private_event | other
+  kind      String   @default("maintenance") @db.VarChar(20)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  court m_court @relation(fields: [courtId], references: [id])
+
+  @@index([companyId])
+  @@index([courtId])
+  @@index([start])
+  @@index([isDeleted])
 }

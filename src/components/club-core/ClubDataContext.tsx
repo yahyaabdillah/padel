@@ -22,19 +22,23 @@ import {
   type Court as DbCourt,
 } from "@/app/(admin)/courts/actions";
 import {
+  getBookingsAction,
+  cancelBookingAction,
+} from "@/app/(admin)/bookings/actions";
+import { getMaintenanceAction, type MaintenanceRecord } from "@/app/(admin)/maintenance/actions";
+import {
   mockCourts,
   type Court,
 } from "@/data/padel/club/courts";
 import {
-  mockBookings,
   type Booking,
 } from "@/data/padel/club/bookings";
-
-const LS_BOOKINGS = "padelhub.club.bookings.v1";
 
 interface ClubDataValue {
   courts: Court[];
   bookings: Booking[];
+  /** active (non-deleted) court maintenance / closure windows */
+  maintenance: MaintenanceRecord[];
   isReady: boolean;
   // courts
   addCourt: (court: Omit<Court, "id">) => Court;
@@ -53,30 +57,28 @@ export const ClubDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [courts, setCourts] = useState<Court[]>(mockCourts);
-  const [bookings, setBookings] = useState<Booking[]>(mockBookings);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [maintenance, setMaintenance] = useState<MaintenanceRecord[]>([]);
   const [isReady, setIsReady] = useState(false);
 
-  // hydrate courts from tenant DB once
+  // hydrate courts + bookings + maintenance from tenant DB once
   useEffect(() => {
     (async () => {
       try {
-        const fetched = await getCourtsAction();
-        if (fetched.length > 0) setCourts(fetched as unknown as Court[]);
+        const [fetchedCourts, fetchedBookings, fetchedMaint] = await Promise.all([
+          getCourtsAction(),
+          getBookingsAction(),
+          getMaintenanceAction(),
+        ]);
+        if (fetchedCourts.length > 0) setCourts(fetchedCourts as unknown as Court[]);
+        setBookings(fetchedBookings as unknown as Booking[]);
+        setMaintenance(fetchedMaint);
       } catch {
-        /* fallback to mock data */
+        /* fallback: keep mock courts, empty bookings */
       }
       setIsReady(true);
     })();
   }, []);
-
-  useEffect(() => {
-    if (!isReady) return;
-    try {
-      localStorage.setItem(LS_BOOKINGS, JSON.stringify(bookings));
-    } catch {
-      /* ignore */
-    }
-  }, [bookings, isReady]);
 
   const addCourt = useCallback((court: Omit<Court, "id">) => {
     const created: Court = { ...court, id: `court-${Date.now().toString(36)}` };
@@ -105,6 +107,7 @@ export const ClubDataProvider: React.FC<{ children: React.ReactNode }> = ({
     setBookings((prev) =>
       prev.map((b) => (b.id === id ? { ...b, status: "cancelled" } : b)),
     );
+    cancelBookingAction(id).catch(console.error);
   }, []);
 
   const updateBooking = useCallback((id: string, patch: Partial<Booking>) => {
@@ -113,16 +116,15 @@ export const ClubDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const reset = useCallback(async () => {
     try {
-      const fetched = await getCourtsAction();
-      setCourts(fetched.length > 0 ? (fetched as unknown as Court[]) : mockCourts);
+      const [fetchedCourts, fetchedBookings] = await Promise.all([
+        getCourtsAction(),
+        getBookingsAction(),
+      ]);
+      setCourts(fetchedCourts.length > 0 ? (fetchedCourts as unknown as Court[]) : mockCourts);
+      setBookings(fetchedBookings as unknown as Booking[]);
     } catch {
       setCourts(mockCourts);
-    }
-    setBookings(mockBookings);
-    try {
-      localStorage.removeItem(LS_BOOKINGS);
-    } catch {
-      /* ignore */
+      setBookings([]);
     }
   }, []);
 
@@ -130,6 +132,7 @@ export const ClubDataProvider: React.FC<{ children: React.ReactNode }> = ({
     () => ({
       courts,
       bookings,
+      maintenance,
       isReady,
       addCourt,
       updateCourt,
@@ -139,7 +142,7 @@ export const ClubDataProvider: React.FC<{ children: React.ReactNode }> = ({
       updateBooking,
       reset,
     }),
-    [courts, bookings, isReady, addCourt, updateCourt, deleteCourt, addBooking, cancelBooking, updateBooking, reset],
+    [courts, bookings, maintenance, isReady, addCourt, updateCourt, deleteCourt, addBooking, cancelBooking, updateBooking, reset],
   );
 
   return <ClubDataContext.Provider value={value}>{children}</ClubDataContext.Provider>;

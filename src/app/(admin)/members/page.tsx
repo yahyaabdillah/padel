@@ -1,106 +1,93 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import DataTable, { type Column } from "@/components/ui/table/DataTable";
 import { Avatar } from "@/components/ui/avatar/Avatar";
 import Tabs from "@/components/ui/tabs/Tabs";
 import StatCard from "@/components/club-core/StatCard";
 import ToneBadge from "@/components/club-core/ToneBadge";
-import MemberDetailDrawer from "@/components/club-core/MemberDetailDrawer";
-import { formatIDR } from "@/components/club-core/format";
-import { getMembersAction } from "@/app/(admin)/members/actions";
+import { useToast } from "@/components/ui/toast/ToastContext";
 import {
-  mockMembers,
-  type Member,
-  type MemberTier,
-  memberTierMeta,
-  memberStatusMeta,
-} from "@/data/padel/club/members";
+  getMembersAction,
+  type MemberRecord,
+} from "@/app/(admin)/members/actions";
+import MemberDetailDrawer from "@/components/club-core/MemberDetailDrawer";
 
-const tierTabs: { value: MemberTier | "all"; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "elite", label: "Elite" },
-  { value: "pro", label: "Pro" },
-  { value: "casual", label: "Casual" },
+type StatusFilter = "all" | "active" | "inactive" | "frozen";
+
+const statusTabs: { value: StatusFilter; label: string }[] = [
+  { value: "all", label: "Semua" },
+  { value: "active", label: "Aktif" },
+  { value: "inactive", label: "Nonaktif" },
+  { value: "frozen", label: "Frozen" },
 ];
 
+const statusMeta: Record<
+  string,
+  { label: string; tone: "success" | "neutral" | "warning" }
+> = {
+  active: { label: "Aktif", tone: "success" },
+  inactive: { label: "Nonaktif", tone: "neutral" },
+  frozen: { label: "Frozen", tone: "warning" },
+};
+
 export default function MembersPage() {
+  const toast = useToast();
   const [query, setQuery] = useState("");
-  const [tier, setTier] = useState<MemberTier | "all">("all");
-  const [selected, setSelected] = useState<Member | null>(null);
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [members, setMembers] = useState<MemberRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<MemberRecord | null>(null);
   const [open, setOpen] = useState(false);
-  const [dbMembers, setDbMembers] = useState<Member[]>([]);
 
-  // Fetch DB-registered members and map them onto the Member shape. Fields that
-  // belong to deferred features (wallet, rating, matches…) default to 0/empty.
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await getMembersAction();
+      setMembers(rows);
+    } catch {
+      toast.error("Gagal memuat data member.");
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
-    (async () => {
-      try {
-        const rows = await getMembersAction();
-        const mapped: Member[] = rows.map((r) => ({
-          id: r.id,
-          name: r.name,
-          email: r.email,
-          phone: r.phone,
-          avatar: r.avatar || "/images/user/user-01.jpg",
-          tier: (r.tier as MemberTier) || "daily",
-          status: (r.status as Member["status"]) || "active",
-          walletBalance: 0,
-          rating: 1000,
-          position: "both",
-          joinedAt: r.createdAt.slice(0, 10),
-          lastVisit: r.createdAt.slice(0, 10),
-          totalBookings: 0,
-          totalSpend: 0,
-          matchesPlayed: 0,
-          wins: 0,
-          city: r.city || "",
-          history: [],
-          onboarded: r.onboarded,
-          coachingInterest: r.coachingInterest,
-          isDaily: r.isDaily,
-        }));
-        setDbMembers(mapped);
-      } catch {
-        /* keep mock-only view on failure */
-      }
-    })();
-  }, []);
-
-  // DB members first (newest registrations on top), then the mock roster.
-  const allMembers = useMemo(() => [...dbMembers, ...mockMembers], [dbMembers]);
+    void load();
+  }, [load]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return allMembers.filter((m) => {
-      if (tier !== "all" && m.tier !== tier) return false;
+    return members.filter((m) => {
+      if (status !== "all" && m.status !== status) return false;
       if (!q) return true;
       return (
         m.name.toLowerCase().includes(q) ||
+        m.username.toLowerCase().includes(q) ||
+        m.memberNo.toLowerCase().includes(q) ||
         m.email.toLowerCase().includes(q) ||
         m.phone.includes(q) ||
-        m.city.toLowerCase().includes(q)
+        (m.city ?? "").toLowerCase().includes(q)
       );
     });
-  }, [query, tier, allMembers]);
+  }, [query, status, members]);
 
   const totals = useMemo(() => {
-    const active = allMembers.filter((m) => m.status === "active").length;
-    const wallet = allMembers.reduce((s, m) => s + m.walletBalance, 0);
-    const elite = allMembers.filter((m) => m.tier === "elite").length;
-    return { total: allMembers.length, active, wallet, elite };
-  }, [allMembers]);
+    const active = members.filter((m) => m.status === "active").length;
+    const inactive = members.filter((m) => m.status !== "active").length;
+    return { total: members.length, active, inactive };
+  }, [members]);
 
-  const openDrawer = (m: Member) => {
+  const openDrawer = (m: MemberRecord) => {
     setSelected(m);
     setOpen(true);
   };
 
-  const columns: Column<Member>[] = [
+  const columns: Column<MemberRecord>[] = [
     {
       key: "name",
-      header: "Player",
+      header: "Member",
       sortable: true,
       sortValue: (m) => m.name,
       accessor: (m) => (
@@ -108,55 +95,46 @@ export default function MembersPage() {
           <Avatar name={m.name} size="md" status={m.status === "active" ? "online" : undefined} />
           <div className="min-w-0">
             <p className="truncate font-medium text-gray-800 dark:text-white/90">{m.name}</p>
-            <p className="truncate text-xs text-gray-400 dark:text-gray-500">{m.email}</p>
+            <p className="truncate text-xs text-gray-400 dark:text-gray-500">
+              @{m.username}
+            </p>
           </div>
         </div>
       ),
     },
     {
-      key: "tier",
-      header: "Tier",
+      key: "memberNo",
+      header: "No. Member",
       sortable: true,
-      sortValue: (m) => m.tier,
-      accessor: (m) => {
-        const t = memberTierMeta[m.tier];
-        return (
-          <span
-            className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold text-white"
-            style={{ background: t.color }}
-          >
-            {t.label}
-          </span>
-        );
-      },
-    },
-    {
-      key: "rating",
-      header: "Rating",
-      sortable: true,
-      align: "center",
-      sortValue: (m) => m.rating,
-      accessor: (m) => <span className="font-semibold text-gray-700 dark:text-gray-200">{m.rating}</span>,
-    },
-    {
-      key: "wallet",
-      header: "Wallet",
-      sortable: true,
-      align: "right",
-      sortValue: (m) => m.walletBalance,
+      sortValue: (m) => m.memberNo,
       accessor: (m) => (
-        <span className={m.walletBalance > 0 ? "font-medium text-gray-800 dark:text-white/90" : "text-gray-400"}>
-          {formatIDR(m.walletBalance)}
+        <span className="font-mono text-xs text-gray-600 dark:text-gray-300">
+          {m.memberNo}
         </span>
       ),
     },
     {
-      key: "bookings",
-      header: "Bookings",
+      key: "phone",
+      header: "Kontak",
+      accessor: (m) => (
+        <div className="min-w-0">
+          <p className="truncate text-sm text-gray-700 dark:text-gray-200">{m.phone}</p>
+          {m.email && (
+            <p className="truncate text-xs text-gray-400 dark:text-gray-500">{m.email}</p>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "createdAt",
+      header: "Terdaftar",
       sortable: true,
-      align: "center",
-      sortValue: (m) => m.totalBookings,
-      accessor: (m) => m.totalBookings,
+      sortValue: (m) => m.createdAt,
+      accessor: (m) => (
+        <span className="text-sm text-gray-600 dark:text-gray-300">
+          {m.createdAt.slice(0, 10)}
+        </span>
+      ),
     },
     {
       key: "status",
@@ -165,7 +143,7 @@ export default function MembersPage() {
       align: "center",
       sortValue: (m) => m.status,
       accessor: (m) => {
-        const s = memberStatusMeta[m.status];
+        const s = statusMeta[m.status] ?? statusMeta.active;
         return <ToneBadge tone={s.tone}>{s.label}</ToneBadge>;
       },
     },
@@ -173,21 +151,20 @@ export default function MembersPage() {
 
   return (
     <div>
-      <PageBreadcrumb pageTitle="Members" />
+      <PageBreadcrumb pageTitle="Data Member" />
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total players" value={totals.total} accent="var(--color-primary)" />
-        <StatCard label="Active" value={totals.active} accent="#14B8A6" />
-        <StatCard label="Elite members" value={totals.elite} accent="#F59E0B" />
-        <StatCard label="Wallet float" value={formatIDR(totals.wallet, true)} accent="#EC4899" />
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard label="Total member" value={totals.total} accent="var(--color-primary)" />
+        <StatCard label="Aktif" value={totals.active} accent="#14B8A6" />
+        <StatCard label="Nonaktif / Frozen" value={totals.inactive} accent="#F59E0B" />
       </div>
 
       <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <Tabs
-            items={tierTabs.map((t) => ({ value: t.value, label: t.label }))}
-            value={tier}
-            onChange={(v) => setTier(v as MemberTier | "all")}
+            items={statusTabs.map((t) => ({ value: t.value, label: t.label }))}
+            value={status}
+            onChange={(v) => setStatus(v as StatusFilter)}
             variant="pill"
             size="sm"
           />
@@ -199,25 +176,43 @@ export default function MembersPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search name, email, phone…"
+              placeholder="Cari nama, username, no. member…"
               className="h-10 w-full rounded-lg border border-gray-300 bg-transparent pl-9 pr-3 text-sm text-gray-800 focus:border-brand-300 focus:outline-hidden focus:ring-3 focus:ring-brand-500/10 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
             />
           </div>
         </div>
 
-        <DataTable
-          columns={columns}
-          data={filtered}
-          rowKey={(m) => m.id}
-          onRowClick={openDrawer}
-          defaultSort={{ key: "name", direction: "asc" }}
-          emptyState={
-            <span className="text-sm text-gray-400">No members match your filters.</span>
-          }
-        />
+        {loading ? (
+          <div className="space-y-2 py-4">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-12 w-full animate-pulse rounded-lg bg-gray-100 dark:bg-white/[0.04]" />
+            ))}
+          </div>
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filtered}
+            rowKey={(m) => m.id}
+            onRowClick={openDrawer}
+            defaultSort={{ key: "createdAt", direction: "desc" }}
+            emptyState={
+              <span className="text-sm text-gray-400">
+                Belum ada member yang cocok dengan filter.
+              </span>
+            }
+          />
+        )}
       </div>
 
-      <MemberDetailDrawer member={selected} isOpen={open} onClose={() => setOpen(false)} />
+      <MemberDetailDrawer
+        member={selected}
+        isOpen={open}
+        onClose={() => setOpen(false)}
+        onChanged={() => {
+          setOpen(false);
+          void load();
+        }}
+      />
     </div>
   );
 }

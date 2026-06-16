@@ -430,3 +430,37 @@ export const courtAvailableSlots = (
   }
   return out;
 };
+
+/** A blocking window (booking or maintenance) with local ISO start/end. */
+export interface BlockingWindow {
+  courtId: string;
+  start: string; // "YYYY-MM-DDTHH:MM:SS" (local)
+  end: string;
+}
+
+/**
+ * Build the set of occupied 30-min storage slots for a court on a given local
+ * date key, from any mix of blocking windows (bookings + maintenance). A window
+ * occupies every slot it overlaps within that day.
+ */
+export const occupiedSlotsFor = (
+  courtId: string,
+  dateKeyStr: string,
+  windows: BlockingWindow[],
+): Set<number> => {
+  const set = new Set<number>();
+  windows
+    .filter((w) => w.courtId === courtId && w.start.startsWith(dateKeyStr))
+    .forEach((w) => {
+      const sh = Number(w.start.slice(11, 13));
+      const sm = Number(w.start.slice(14, 16));
+      const eh = Number(w.end.slice(11, 13));
+      const em = Number(w.end.slice(14, 16));
+      const startSlot = hourToSlot(sh) + (sm >= 30 ? 1 : 0);
+      const endSlot = hourToSlot(eh) + (em > 30 ? 2 : em > 0 ? 1 : 0);
+      for (let s = startSlot; s < endSlot; s++) {
+        if (s >= 0 && s < SLOTS_PER_DAY) set.add(s);
+      }
+    });
+  return set;
+};

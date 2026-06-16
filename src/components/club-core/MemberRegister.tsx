@@ -106,7 +106,7 @@ const FormSection: React.FC<{
 
 export default function MemberRegister() {
   const toast = useToast();
-  const { courts, bookings, addBooking, isReady } = useClubData();
+  const { courts, bookings, maintenance, addBooking, isReady } = useClubData();
 
   // Resolve a court from the LIVE store (DB) first, falling back to mock data
   // so format/partySize lookups work whether ids are UUID (DB) or mock slugs.
@@ -115,6 +115,8 @@ export default function MemberRegister() {
 
   // ── identity + tier ──
   const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [tier, setTier] = useState<MemberTier>("pro");
@@ -129,7 +131,7 @@ export default function MemberRegister() {
   const [ptSessions, setPtSessions] = useState<DraftPtSession[]>([]);
 
   const [submitted, setSubmitted] = useState(false);
-  const [done, setDone] = useState<null | { memberNo: string; password: string }>(null);
+  const [done, setDone] = useState<null | { memberNo: string; username: string }>(null);
 
   // daily walk-in: books & pays like a normal customer, no free quota
   const isDaily = MEMBERSHIP_ENABLED ? tier === "daily" : false;
@@ -223,6 +225,8 @@ export default function MemberRegister() {
   // ── validation ──
   const identityValid =
     name.trim().length >= 2 &&
+    username.trim().length >= 3 &&
+    password.length >= 6 &&
     phone.replace(/\D/g, "").length >= 8 &&
     emailValid(email);
   const courtValid = isDaily ? courtDrafts.length === 1 : true;
@@ -312,12 +316,10 @@ export default function MemberRegister() {
 
     const res = await registerMemberAction({
       name: name.trim(),
+      username: username.trim().toLowerCase(),
+      password,
       phone,
       email: email.trim() || undefined,
-      // Membership tier is deferred — register everyone as a plain "daily" member.
-      tier: MEMBERSHIP_ENABLED ? tier : "daily",
-      isDaily: MEMBERSHIP_ENABLED ? isDaily : true,
-      coachingInterest: COACHING_ENABLED ? ptEnabled : false,
       bookings: draftBookings,
     });
 
@@ -351,7 +353,7 @@ export default function MemberRegister() {
       });
     });
 
-    setDone({ memberNo: res.memberNo, password: res.tempPassword || "" });
+    setDone({ memberNo: res.memberNo, username: res.username || username.trim().toLowerCase() });
     toast.success(
       `${name.trim()} terdaftar${isDaily ? " sebagai walk-in harian" : ""}.`,
       "Registrasi berhasil",
@@ -360,6 +362,8 @@ export default function MemberRegister() {
 
   const reset = () => {
     setName("");
+    setUsername("");
+    setPassword("");
     setPhone("");
     setEmail("");
     setTier("pro");
@@ -418,6 +422,30 @@ export default function MemberRegister() {
                     error={submitted && name.trim().length < 2}
                     errorText="Nama minimal 2 karakter"
                   />
+                  <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                    <TextInput
+                      label="Username"
+                      labelInfo="Username untuk login member ke portal. Huruf kecil tanpa spasi, unik per klub."
+                      value={username}
+                      onChange={(v) => setUsername(v.toLowerCase().replace(/\s+/g, ""))}
+                      placeholder="cth. andiwijaya"
+                      required
+                      error={submitted && username.trim().length < 3}
+                      errorText="Username minimal 3 karakter"
+                      hint="Dipakai member untuk login"
+                    />
+                    <TextInput
+                      label="Password"
+                      labelInfo="Password awal untuk login member. Minimal 6 karakter; member bisa menggantinya nanti."
+                      type="password"
+                      value={password}
+                      onChange={setPassword}
+                      placeholder="Minimal 6 karakter"
+                      required
+                      error={submitted && password.length < 6}
+                      errorText="Password minimal 6 karakter"
+                    />
+                  </div>
                   <PhoneInput
                     label="Nomor Telepon"
                     labelInfo="Nomor aktif untuk notifikasi booking & WhatsApp. Format: +62 8xx xxxx xxxx."
@@ -434,13 +462,13 @@ export default function MemberRegister() {
                   />
                   <TextInput
                     label="Email (opsional)"
-                    labelInfo="Digunakan untuk login ke member portal & notifikasi email. Boleh dikosongkan."
+                    labelInfo="Digunakan untuk notifikasi email. Boleh dikosongkan."
                     type="email"
                     value={email}
                     onChange={setEmail}
                     placeholder="cth. andi@email.com"
                     validate
-                    hint="Digunakan untuk login & notifikasi"
+                    hint="Untuk notifikasi (opsional)"
                   />
                 </div>
               </FormSection>
@@ -580,6 +608,7 @@ export default function MemberRegister() {
                       tier={tier}
                       courts={courts}
                       bookings={bookings}
+                      maintenance={maintenance}
                       drafts={courtDrafts}
                       onAdd={(b) =>
                         setCourtDrafts((prev) => [...prev, { ...b, id: nextId("cb") }])
@@ -797,9 +826,9 @@ export default function MemberRegister() {
                 </p>
               </div>
               <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-muted)] p-3">
-                <p className="text-xs text-[var(--text-caption)]">Password sementara</p>
+                <p className="text-xs text-[var(--text-caption)]">Username login</p>
                 <p className="mt-0.5 font-mono text-sm font-bold text-[var(--text-heading)]">
-                  {done.password}
+                  {done.username}
                 </p>
               </div>
             </div>

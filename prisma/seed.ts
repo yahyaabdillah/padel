@@ -94,7 +94,6 @@ const USERS: { userId: string; name: string; roleKey: string; email: string }[] 
   { userId: "owner", name: "Raka Pradana", roleKey: "owner", email: "owner@smashcourt.id" },
   { userId: "staff", name: "Budi Santoso", roleKey: "staff", email: "frontdesk@smashcourt.id" },
   { userId: "coach", name: "Dimas Pratama", roleKey: "coach", email: "dimas@smashcourt.id" },
-  { userId: "member", name: "Andi Wijaya", roleKey: "member", email: "andi@email.com" },
 ];
 
 async function seedMaster() {
@@ -113,8 +112,8 @@ async function seedMaster() {
   for (const r of ROLES) {
     const role = await master.m_role.upsert({
       where: { key: r.key },
-      update: { name: r.name, scope: r.scope, level: r.level, isSystem: true },
-      create: { key: r.key, name: r.name, scope: r.scope, level: r.level, isSystem: true },
+      update: { name: r.name, scope: r.scope, level: r.level, isSystem: true, createdBy: "seed", updatedBy: "seed" },
+      create: { key: r.key, name: r.name, scope: r.scope, level: r.level, isSystem: true, createdBy: "seed" },
     });
     // reset mappings then re-add
     await master.m_role_permission.deleteMany({ where: { roleId: role.id } });
@@ -123,7 +122,7 @@ async function seedMaster() {
       const pid = permByKey[k];
       if (!pid) continue;
       await master.m_role_permission.create({
-        data: { roleId: role.id, permissionId: pid },
+        data: { roleId: role.id, permissionId: pid, createdBy: "seed" },
       });
     }
   }
@@ -166,7 +165,7 @@ async function seedTenant() {
   for (const u of USERS) {
     await tenant.m_user.upsert({
       where: { companyId_userId: { companyId: COMPANY_ID, userId: u.userId } },
-      update: { passwordHash, roleKey: u.roleKey, namalengkap: u.name, email: u.email, isActive: true, isdeleted: 0 },
+      update: { passwordHash, roleKey: u.roleKey, namalengkap: u.name, email: u.email, isActive: true, isDeleted: 0, updatedBy: "seed" },
       create: {
         companyId: COMPANY_ID,
         userId: u.userId,
@@ -174,6 +173,7 @@ async function seedTenant() {
         roleKey: u.roleKey,
         namalengkap: u.name,
         email: u.email,
+        createdBy: "seed",
       },
     });
   }
@@ -191,8 +191,8 @@ async function seedTenant() {
   for (const h of defaultHours) {
     await tenant.m_operating_hours.upsert({
       where: { companyId_day: { companyId: COMPANY_ID, day: h.day } },
-      update: { open: h.open, openStart: h.openStart, openEnd: h.openEnd },
-      create: { companyId: COMPANY_ID, ...h },
+      update: { open: h.open, openStart: h.openStart, openEnd: h.openEnd, updatedBy: "seed" },
+      create: { companyId: COMPANY_ID, ...h, createdBy: "seed" },
     });
   }
 
@@ -262,7 +262,7 @@ async function seedTenant() {
 
   for (const c of sampleCourts) {
     const existing = await tenant.m_court.findFirst({
-      where: { companyId: COMPANY_ID, name: c.name, isdeleted: 0 },
+      where: { companyId: COMPANY_ID, name: c.name, isDeleted: 0 },
     });
     if (!existing) {
       await tenant.m_court.create({
@@ -278,9 +278,37 @@ async function seedTenant() {
           color: c.color,
           note: c.note,
           schedule: c.schedule as any, // Prisma Json
+          createdBy: "seed",
         },
       });
     }
+  }
+
+  console.log("→ Seeding tenant: sample member");
+  const memberPasswordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+  const sampleMember = {
+    memberNo: "PHB-2026-0001",
+    username: "andi",
+    name: "Andi Wijaya",
+    phone: "+62 813 1000 2001",
+    email: "andi@email.com",
+  };
+  const existingMember = await tenant.m_member.findFirst({
+    where: { companyId: COMPANY_ID, username: sampleMember.username },
+  });
+  if (!existingMember) {
+    await tenant.m_member.create({
+      data: {
+        companyId: COMPANY_ID,
+        memberNo: sampleMember.memberNo,
+        username: sampleMember.username,
+        passwordHash: memberPasswordHash,
+        name: sampleMember.name,
+        phone: sampleMember.phone,
+        email: sampleMember.email,
+        createdBy: "seed",
+      },
+    });
   }
 }
 
