@@ -6,10 +6,10 @@
 // every hour can be set to Reguler / Peak / Libur (maintenance). Persists via
 // useClubData. Every input carries an info tooltip.
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Clock } from "lucide-react";
+import { Clock, ImageIcon, Trash2 } from "lucide-react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import Card from "@/components/ui/card/Card";
 import Button from "@/components/ui/button/Button";
@@ -18,8 +18,12 @@ import Textarea from "@/components/ui/input/Textarea";
 import CurrencyInput from "@/components/ui/input/CurrencyInput";
 import InputLabel from "@/components/ui/input/InputLabel";
 import Switch from "@/components/ui/switch/Switch";
+import Dropzone, { type DropzoneFile } from "@/components/ui/dropzone/Dropzone";
+import ImageCropperModal from "@/components/ui/cropper/ImageCropperModal";
+import type { CropResult } from "@/components/ui/cropper/ImageCropper";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { useClubData } from "@/components/club-core/ClubDataContext";
+import { uploadCourtImageAction } from "@/app/(admin)/courts/actions";
 import { useOperatingHours } from "@/context/OperatingHoursContext";
 import { formatIDR } from "@/components/club-core/format";
 import ToneBadge from "@/components/club-core/ToneBadge";
@@ -45,6 +49,11 @@ import {
 } from "@/data/padel/club/courts";
 
 type CourtDraft = Omit<Court, "id">;
+
+/** The court hero image ratio (matches the card/preview banner — wide strip). */
+const HERO_ASPECT = 16 / 6; // ≈ 2.67 : 1
+/** Tolerance before we force the crop modal (≈ a few %). */
+const ASPECT_TOLERANCE = 0.04;
 
 const makeEmptyDraft = (): CourtDraft => ({
   name: "",
@@ -147,6 +156,78 @@ export default function CourtForm({ courtId }: CourtFormProps) {
 
   const set = <K extends keyof CourtDraft>(key: K, value: CourtDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
+
+  // ── court hero image (crop to a consistent ratio, then upload to disk) ──
+  // On upload: if the ratio matches HERO_ASPECT we upload as-is, otherwise we
+  // open the crop modal first. The cropped/normalized image is written to
+  // /public/images/courts via a server action and only its PATH is stored.
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+
+  const fileToDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const persistImage = useCallback(
+    async (dataUrl: string) => {
+      setUploadingImage(true);
+      const res = await uploadCourtImageAction(dataUrl);
+      setUploadingImage(false);
+      if (!res.success || !res.path) {
+        toast.error(res.error || "Gagal mengunggah gambar.", "Upload gagal");
+        return;
+      }
+      setDraft((d) => ({ ...d, image: res.path }));
+    },
+    [toast],
+  );
+
+  const handleImageUpload = useCallback(
+    (files: DropzoneFile[]) => {
+      const file = files[files.length - 1]?.file;
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = async () => {
+        const ratio = img.naturalWidth / img.naturalHeight;
+        const matches =
+          Math.abs(ratio - HERO_ASPECT) <= HERO_ASPECT * ASPECT_TOLERANCE;
+        if (matches) {
+          // already the right ratio → upload as-is
+          try {
+            const dataUrl = await fileToDataUrl(file);
+            await persistImage(dataUrl);
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        } else {
+          // ratio mismatch → let the user crop first
+          setCropSrc(url);
+        }
+      };
+      img.onerror = () => URL.revokeObjectURL(url);
+      img.src = url;
+    },
+    [persistImage],
+  );
+
+  const handleCropConfirm = async (result: CropResult) => {
+    const src = cropSrc;
+    setCropSrc(null);
+    await persistImage(result.dataUrl);
+    if (src) URL.revokeObjectURL(src);
+  };
+
+  const handleCropCancel = () => {
+    if (cropSrc) URL.revokeObjectURL(cropSrc);
+    setCropSrc(null);
+  };
+
+  const removeImage = () => set("image", "");
 
   // Master operating window for a weekday (closed-day → empty window).
   const windowFor = (day: number) => {
@@ -346,7 +427,7 @@ export default function CourtForm({ courtId }: CourtFormProps) {
                   <div>
                     <FieldLabel
                       label="Warna Aksen"
-                      tip="Warna yang dipakai untuk membedakan lapangan di kalender & grid."
+                      tip="Warna yang dipakai untuk membedakan lapangan di kalender & grid. Juga dipakai sebagai latar hero bila tidak ada gambar."
                     />
                     <div className="flex flex-wrap gap-2">
                       {courtColors.map((c) => (
@@ -365,6 +446,62 @@ export default function CourtForm({ courtId }: CourtFormProps) {
                         />
                       ))}
                     </div>
+                  </div>
+
+                  {/* Hero image (overrides the accent color background) */}
+                  <div>
+                    <FieldLabel
+                      label="Gambar Hero (opsional)"
+                      tip="Gambar latar pada bagian hero lapangan. Saat diunggah, gambar dengan rasio berbeda akan diminta dipotong agar konsisten (rasio lebar)."
+                    />
+                    {draft.image ? (
+                      <div className="space-y-3">
+                        <div
+                          className="relative w-full overflow-hidden rounded-xl border border-[var(--border-default)]"
+                          style={{ aspectRatio: String(HERO_ASPECT) }}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={draft.image}
+                            alt="Hero lapangan"
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            startIcon={<ImageIcon className="h-4 w-4" />}
+                            onClick={() => setCropSrc(draft.image ?? null)}
+                          >
+                            Sesuaikan ulang
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
+                            startIcon={<Trash2 className="h-4 w-4" />}
+                            onClick={removeImage}
+                          >
+                            Hapus gambar
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Dropzone
+                        multiple={false}
+                        showPreview={false}
+                        disabled={uploadingImage}
+                        icon={<ImageIcon className="h-7 w-7" />}
+                        title={uploadingImage ? "Mengunggah…" : "Unggah gambar lapangan"}
+                        description="atau klik untuk memilih (JPG / PNG)"
+                        validation={{ accept: ["image/png", "image/jpeg"], maxSizeMB: 8, maxFiles: 1 }}
+                        onFilesChange={handleImageUpload}
+                        onReject={(_f, reason) => toast.error(reason, "Gambar ditolak")}
+                      />
+                    )}
                   </div>
 
                   <Textarea
@@ -522,11 +659,18 @@ export default function CourtForm({ courtId }: CourtFormProps) {
           <div className="lg:sticky lg:top-24">
             <Card padding="none">
               <div
-                className="relative h-24 rounded-t-2xl"
-                style={{
-                  background: `linear-gradient(120deg, ${draft.color}, color-mix(in srgb, ${draft.color} 55%, #000))`,
-                }}
+                className="relative h-24 rounded-t-2xl bg-cover bg-center"
+                style={
+                  draft.image
+                    ? { backgroundImage: `url(${draft.image})` }
+                    : {
+                        background: `linear-gradient(120deg, ${draft.color}, color-mix(in srgb, ${draft.color} 55%, #000))`,
+                      }
+                }
               >
+                {draft.image && (
+                  <div className="absolute inset-0 rounded-t-2xl bg-gradient-to-t from-black/60 to-transparent" />
+                )}
                 <div className="absolute right-3 top-3">
                   <ToneBadge tone={courtStatusMeta[draft.status].tone} variant="solid">
                     {courtStatusMeta[draft.status].label}
@@ -607,6 +751,17 @@ export default function CourtForm({ courtId }: CourtFormProps) {
         openEnd={editingWindow.openEnd}
         slotMinutes={slotMinutes}
         onSave={saveDaySchedule}
+      />
+
+      <ImageCropperModal
+        isOpen={cropSrc != null}
+        src={cropSrc}
+        aspect={HERO_ASPECT}
+        outputWidth={1280}
+        title="Sesuaikan Gambar Lapangan"
+        description="Atur posisi & zoom agar gambar pas dengan rasio hero lapangan."
+        onCancel={handleCropCancel}
+        onConfirm={handleCropConfirm}
       />
     </div>
   );

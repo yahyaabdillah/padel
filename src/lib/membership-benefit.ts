@@ -37,6 +37,10 @@ export interface BenefitInput {
   quotaRemaining?: number;
   /** sessions to price */
   sessions: BenefitSessionInput[];
+  /** one-time membership join fee to collect in THIS checkout (IDR). 0/omit
+   * when the join fee is already paid or there is no plan. Added on top of the
+   * court payable — it is not a court charge and is never discounted. */
+  joinFee?: number;
 }
 
 /** Per-session pricing outcome. */
@@ -66,8 +70,12 @@ export interface BenefitResult {
   discountSavings: number;
   /** total IDR saved (quota + discount) */
   totalSavings: number;
-  /** final total payable after benefits */
+  /** court total payable after benefits (before join fee) */
   payable: number;
+  /** one-time join fee collected in this checkout (IDR) */
+  joinFee: number;
+  /** the amount actually charged in this checkout = payable + joinFee */
+  grandTotal: number;
   /** quota left after this calculation */
   quotaRemainingAfter: number;
 }
@@ -81,6 +89,7 @@ const clampPct = (n: number) => Math.min(100, Math.max(0, n));
  */
 export function calcMembershipBenefit(input: BenefitInput): BenefitResult {
   const { plan, sessions } = input;
+  const joinFee = Math.max(0, input.joinFee ?? 0);
   const subtotal = sessions.reduce((s, x) => s + Math.max(0, x.basePrice), 0);
 
   // No plan → pay full price, no benefits.
@@ -100,6 +109,8 @@ export function calcMembershipBenefit(input: BenefitInput): BenefitResult {
       discountSavings: 0,
       totalSavings: 0,
       payable: subtotal,
+      joinFee,
+      grandTotal: subtotal + joinFee,
       quotaRemainingAfter: 0,
     };
   }
@@ -150,6 +161,7 @@ export function calcMembershipBenefit(input: BenefitInput): BenefitResult {
   });
 
   const totalSavings = quotaSavings + discountSavings;
+  const payable = Math.max(0, subtotal - totalSavings);
 
   return {
     sessions: resultSessions,
@@ -158,7 +170,9 @@ export function calcMembershipBenefit(input: BenefitInput): BenefitResult {
     quotaSavings,
     discountSavings,
     totalSavings,
-    payable: Math.max(0, subtotal - totalSavings),
+    payable,
+    joinFee,
+    grandTotal: payable + joinFee,
     quotaRemainingAfter: Math.max(0, quotaAvailable - coveredIndex.size),
   };
 }

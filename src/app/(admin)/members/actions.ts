@@ -52,6 +52,11 @@ export type RegisterMemberInput = {
   phone: string;
   email?: string;
   city?: string;
+  /** membership plan to assign on registration (null = no plan / walk-in) */
+  planId?: string | null;
+  /** collect the plan's join fee now (page register checkout). When false the
+   * join fee stays outstanding and is collected at the booking payment step. */
+  collectJoinFee?: boolean;
   /** court bookings assembled in the registration form (paid at booking) */
   bookings?: BookingDraftInput[];
 };
@@ -77,6 +82,43 @@ async function requireSession(): Promise<AuthSession | null> {
 
 function genMemberNo(): string {
   return `PHB-2026-${String(1000 + Math.floor(Math.random() * 8999))}`;
+}
+
+/** Membership plan benefits surfaced to the registration / booking UIs. */
+export type PlanOption = {
+  id: string;
+  name: string;
+  color: string;
+  joinFee: number;
+  includedCourtBookings: number;
+  resetPeriodDays: number;
+  freeCoaching: number;
+  courtDiscountPct: number;
+  perks: string[];
+  highlighted: boolean;
+};
+
+/** Active membership plans for the tenant (by sort order) — for pickers. */
+export async function getActivePlansAction(): Promise<PlanOption[]> {
+  const session = await requireSession();
+  if (!session) return [];
+  const db = await getTenantDb();
+  const rows = await db.m_membership_plan.findMany({
+    where: { companyId: session.companyId, active: true, ...NOT_DELETED },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  return rows.map((p) => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    joinFee: p.joinFee,
+    includedCourtBookings: p.includedCourtBookings,
+    resetPeriodDays: p.resetPeriodDays,
+    freeCoaching: p.freeCoaching,
+    courtDiscountPct: p.courtDiscountPct,
+    perks: Array.isArray(p.perks) ? (p.perks as string[]) : [],
+    highlighted: p.highlighted,
+  }));
 }
 
 /** Lightweight member options for booking/select inputs (newest first). */
@@ -268,6 +310,24 @@ export async function registerMemberAction(
     const memberNo = genMemberNo();
     const passwordHash = await bcrypt.hash(input.password, 10);
 
+    // Resolve the membership plan (if any) for assignment + tier label.
+    let planId: string | null = null;
+    let tier = "daily";
+    let joinFee = 0;
+    if (input.planId) {
+      const plan = await db.m_membership_plan.findFirst({
+        where: { id: input.planId, companyId: session.companyId, active: true, ...NOT_DELETED },
+      });
+      if (!plan) return { success: false, error: "Plan membership tidak ditemukan." };
+      planId = plan.id;
+      tier = plan.name.toLowerCase();
+      joinFee = plan.joinFee;
+    }
+
+    // Whether the join fee is settled at registration (page checkout) or left
+    // outstanding to be collected at the booking payment step (modal flow).
+    const joinFeePaidNow = Boolean(planId) && (joinFee === 0 || input.collectJoinFee === true);
+
     const member = await db.t_member.create({
       data: {
         companyId: session.companyId,
@@ -277,19 +337,30 @@ export async function registerMemberAction(
         name: input.name.trim(),
         phone: input.phone,
         email: input.email?.trim() || null,
-        tier: "daily",
+        tier,
         status: "active",
         onboarded: false,
         city: input.city?.trim() || null,
+        planId,
+        cycleStart: planId ? new Date() : null,
+        quotaUsed: 0,
+        coachingUsed: 0,
+        joinFeePaid: joinFeePaidNow,
         ...auditCreate(session.userId),
       },
     });
+
+    // Join fee collected at registration checkout is recorded on the booking
+    // header (court bookings) or as a standalone fee-only transaction.
+    const joinFeeCharged = joinFeePaidNow && joinFee > 0 ? joinFee : 0;
 
     // Court bookings (the only thing paid for at registration) → one
     // transaction header + a detail line per session.
     if (input.bookings && input.bookings.length > 0) {
       const first = input.bookings[0];
-      const totalPrice = input.bookings.reduce((s, b) => s + b.price, 0);
+      const courtTotal = input.bookings.reduce((s, b) => s + b.price, 0);
+      // count free (quota-covered) sessions to burn on the member's quota
+      const quotaConsumed = input.bookings.filter((b) => b.price === 0).length;
       await db.t_booking.create({
         data: {
           companyId: session.companyId,
@@ -297,7 +368,10 @@ export async function registerMemberAction(
           type: first.type,
           status: first.status,
           customer: first.customer,
-          totalPrice,
+          totalPrice: courtTotal + joinFeeCharged,
+          joinFee: joinFeeCharged,
+          quotaConsumed,
+          note: joinFeeCharged > 0 ? `Termasuk join fee ${joinFeeCharged}` : null,
           ...auditCreate(session.userId),
           details: {
             create: input.bookings.map((b) => ({
@@ -313,6 +387,28 @@ export async function registerMemberAction(
               ...auditCreate(b.createdBy || session.userId),
             })),
           },
+        },
+      });
+      // burn membership quota consumed by free court sessions at registration
+      if (planId && quotaConsumed > 0) {
+        await db.t_member.update({
+          where: { id: member.id },
+          data: { quotaUsed: { increment: quotaConsumed }, ...auditUpdate(session.userId) },
+        });
+      }
+    } else if (joinFeeCharged > 0) {
+      // No court bookings, but join fee paid now → standalone fee transaction.
+      await db.t_booking.create({
+        data: {
+          companyId: session.companyId,
+          memberId: member.id,
+          type: "member",
+          status: "completed",
+          customer: input.name.trim(),
+          totalPrice: joinFeeCharged,
+          joinFee: joinFeeCharged,
+          note: "Join fee membership",
+          ...auditCreate(session.userId),
         },
       });
     }

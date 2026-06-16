@@ -99,21 +99,29 @@ function CourtsInner() {
                 key={c.id}
                 className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white transition-all duration-300 hover:-translate-y-1 hover:shadow-theme-lg dark:border-gray-800 dark:bg-white/[0.03]"
               >
-                {/* color banner */}
+                {/* color banner / hero image */}
                 <div
-                  className="relative h-24"
-                  style={{
-                    background: `linear-gradient(120deg, ${c.color}, color-mix(in srgb, ${c.color} 55%, #000))`,
-                  }}
+                  className="relative h-24 bg-cover bg-center"
+                  style={
+                    c.image
+                      ? { backgroundImage: `url(${c.image})` }
+                      : {
+                          background: `linear-gradient(120deg, ${c.color}, color-mix(in srgb, ${c.color} 55%, #000))`,
+                        }
+                  }
                 >
-                  <div
-                    className="absolute inset-0 opacity-20"
-                    style={{
-                      backgroundImage:
-                        "radial-gradient(circle at 20% 30%, #fff 1px, transparent 1px)",
-                      backgroundSize: "18px 18px",
-                    }}
-                  />
+                  {c.image ? (
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                  ) : (
+                    <div
+                      className="absolute inset-0 opacity-20"
+                      style={{
+                        backgroundImage:
+                          "radial-gradient(circle at 20% 30%, #fff 1px, transparent 1px)",
+                        backgroundSize: "18px 18px",
+                      }}
+                    />
+                  )}
                   <div className="absolute right-3 top-3">
                     <ToneBadge tone={sMeta.tone} variant="solid">
                       {sMeta.label}

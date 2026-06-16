@@ -37,3 +37,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# uploaded court images (keep the folder, ignore uploads)
+/public/images/courts/*
+!/public/images/courts/.gitkeep

@@ -22,15 +22,17 @@ import {
   STORAGE_SLOT_MINUTES,
 } from "@/data/padel/club/courts";
 import { type Booking, dateKey } from "@/data/padel/club/bookings";
-import type { MemberTier } from "@/data/padel/club/members";
 import type { MaintenanceRecord } from "@/app/(admin)/maintenance/actions";
-import { type DraftBooking, tierQuota, TODAY_KEY } from "./types";
+import { type DraftBooking, TODAY_KEY } from "./types";
 
 const SESSION_MINUTES = 60;
 const SLOTS_PER_SESSION = SESSION_MINUTES / STORAGE_SLOT_MINUTES; // 2
 
 interface CourtBookingStepProps {
-  tier: MemberTier;
+  /** free court-booking quota from the selected plan (0 = none) */
+  quota: number;
+  /** when true, restrict to a single session today (walk-in style) */
+  lockedToday?: boolean;
   courts: Court[];
   bookings: Booking[];
   maintenance?: MaintenanceRecord[];
@@ -55,7 +57,8 @@ interface CourtOption {
 }
 
 const CourtBookingStep: React.FC<CourtBookingStepProps> = ({
-  tier,
+  quota,
+  lockedToday = false,
   courts,
   bookings,
   maintenance = [],
@@ -67,9 +70,6 @@ const CourtBookingStep: React.FC<CourtBookingStepProps> = ({
     () => courts.filter((c) => c.status === "active"),
     [courts],
   );
-  const lockedToday = tier === "daily";
-  const quota = tierQuota[tier];
-
   const [date, setDate] = useState<Date>(new Date(`${TODAY_KEY}T00:00:00`));
   const [startTime, setStartTime] = useState<string>("07:00");
   const [times, setTimes] = useState<TimeOption[] | null>(null);

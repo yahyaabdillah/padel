@@ -4,9 +4,11 @@
 //
 // Run: npm run db:reset-transactional
 //
-// Wiped (in FK-safe order): t_booking_detail → t_booking → t_court_maintenance
+// Wiped (in FK-safe order): t_coaching_session → t_coaching_schedule →
+//                           t_booking_detail → t_booking → t_court_maintenance
 //                           → t_member
-// Kept: m_user, m_court, m_operating_hours, m_membership_plan (and the master DB)
+// Kept: m_user, m_court, m_operating_hours, m_membership_plan, m_coach,
+//       m_coach_package (and the master DB)
 
 import { PrismaClient as TenantClient } from "@prisma/tenant-client";
 
@@ -16,6 +18,12 @@ async function main() {
   console.log("→ Resetting transactional tables (t_*) …");
 
   // Child-first to respect foreign keys.
+  const coachingSession = await tenant.t_coaching_session.deleteMany({});
+  console.log(`   t_coaching_session:  ${coachingSession.count} removed`);
+
+  const coachingSchedule = await tenant.t_coaching_schedule.deleteMany({});
+  console.log(`   t_coaching_schedule: ${coachingSchedule.count} removed`);
+
   const detail = await tenant.t_booking_detail.deleteMany({});
   console.log(`   t_booking_detail:    ${detail.count} removed`);
 

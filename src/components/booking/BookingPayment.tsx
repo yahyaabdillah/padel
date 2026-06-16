@@ -147,6 +147,8 @@ export default function BookingPayment({
 
   // ── membership benefit across the whole cart ──
   const plan = member?.plan ?? null;
+  // Outstanding membership join fee (collected once, in this checkout).
+  const joinFeeDue = member?.joinFeeDue ?? 0;
   const benefit = useMemo(
     () =>
       calcMembershipBenefit({
@@ -158,14 +160,15 @@ export default function BookingPayment({
           : null,
         quotaRemaining: member?.quotaRemaining ?? 0,
         sessions: sessions.map((s) => ({ basePrice: s.price })),
+        joinFee: joinFeeDue,
       }),
-    [plan, member?.quotaRemaining, sessions],
+    [plan, member?.quotaRemaining, sessions, joinFeeDue],
   );
-  const payableTotal = benefit.payable;
+  const grandTotal = benefit.grandTotal;
 
   const cashNum = parseInt(cash.replace(/\D/g, ""), 10) || 0;
-  const change = method === "Cash" ? cashNum - payableTotal : 0;
-  const cashShort = method === "Cash" && cashNum < payableTotal;
+  const change = method === "Cash" ? cashNum - grandTotal : 0;
+  const cashShort = method === "Cash" && cashNum < grandTotal;
 
   const removeItem = (id: string) =>
     setCart((prev) => prev.filter((c) => c.id !== id));
@@ -215,6 +218,7 @@ export default function BookingPayment({
       {
         memberId: member.id,
         quotaConsumed: benefit.quotaCoveredCount,
+        joinFee: joinFeeDue,
       },
     );
     if (!res.success || !res.id) {
@@ -225,7 +229,7 @@ export default function BookingPayment({
 
     setConfirmedRef(res.id);
     toast.success(
-      `Pembayaran ${formatIDR(payableTotal)} diterima.`,
+      `Pembayaran ${formatIDR(grandTotal)} diterima.`,
       `${sessions.length} booking dikonfirmasi`,
     );
   };
@@ -291,9 +295,15 @@ export default function BookingPayment({
                 <span className="font-medium">−{formatIDR(benefit.totalSavings)}</span>
               </div>
             )}
+            {joinFeeDue > 0 && (
+              <div className="mt-1.5 flex justify-between">
+                <span className="text-[var(--text-caption)]">Join fee membership</span>
+                <span className="font-medium text-[var(--text-heading)]">{formatIDR(joinFeeDue)}</span>
+              </div>
+            )}
             <div className="mt-1.5 flex justify-between">
               <span className="text-[var(--text-caption)]">Total</span>
-              <span className="font-semibold text-[var(--text-heading)]">{formatIDR(payableTotal)}</span>
+              <span className="font-semibold text-[var(--text-heading)]">{formatIDR(grandTotal)}</span>
             </div>
             {method === "Cash" && (
               <div className="mt-1.5 flex justify-between">
@@ -455,7 +465,7 @@ export default function BookingPayment({
               onClick={pay}
               disabled={saving || sessions.length === 0}
             >
-              {saving ? "Menyimpan…" : `Bayar · ${formatIDR(payableTotal)}`}
+              {saving ? "Menyimpan…" : `Bayar · ${formatIDR(grandTotal)}`}
             </Button>
           </div>
         </Card>
@@ -500,12 +510,20 @@ export default function BookingPayment({
                   <span>−{formatIDR(benefit.totalSavings)}</span>
                 </div>
               )}
+              {joinFeeDue > 0 && (
+                <div className="flex items-center justify-between text-[var(--text-caption)]">
+                  <span>Join fee {plan ? plan.name : ""}</span>
+                  <span className="font-medium text-[var(--text-heading)]">
+                    +{formatIDR(joinFeeDue)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="mt-3 border-t border-[var(--border-default)] pt-4">
               <p className="text-sm text-[var(--text-caption)]">Total bayar</p>
               <p className="mt-1 text-3xl font-bold text-brand-600 dark:text-brand-400">
-                {formatIDR(payableTotal)}
+                {formatIDR(grandTotal)}
               </p>
             </div>
           </Card>

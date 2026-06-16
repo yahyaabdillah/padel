@@ -314,6 +314,23 @@ async function seedTenant() {
   console.log("→ Seeding tenant: membership plans");
   const samplePlans = [
     {
+      name: "Daily",
+      color: "#94A3B8",
+      joinFee: 0,
+      includedCourtBookings: 0,
+      resetPeriodDays: 0,
+      freeCoaching: 0,
+      courtDiscountPct: 0,
+      perks: [
+        "Bayar per main (walk-in)",
+        "Tanpa biaya gabung",
+        "Tanpa komitmen",
+      ],
+      active: true,
+      highlighted: false,
+      sortOrder: 0,
+    },
+    {
       name: "Pro",
       color: "#6D5BFF",
       joinFee: 450_000,
@@ -328,7 +345,7 @@ async function seedTenant() {
       ],
       active: true,
       highlighted: true,
-      sortOrder: 0,
+      sortOrder: 1,
     },
     {
       name: "Elite",
@@ -346,7 +363,7 @@ async function seedTenant() {
       ],
       active: true,
       highlighted: false,
-      sortOrder: 1,
+      sortOrder: 2,
     },
   ];
   for (const p of samplePlans) {
@@ -356,6 +373,85 @@ async function seedTenant() {
     if (!exists) {
       await tenant.m_membership_plan.create({
         data: { companyId: COMPANY_ID, ...p, perks: p.perks as object, createdBy: "seed" },
+      });
+    }
+  }
+
+  console.log("→ Seeding tenant: coaches");
+  const defaultAvailability = Array.from({ length: 7 }, (_, day) => ({
+    day,
+    works: day !== 0, // Sunday off
+    start: 9,
+    end: 21,
+  }));
+  const sampleCoaches = [
+    {
+      name: "Dimas Pratama",
+      level: "Head Coach",
+      status: "active",
+      color: "#6D5BFF",
+      ratePerHour: 350_000,
+      specialties: ["Bandeja", "Strategy", "Match Play"],
+      bio: "Mantan pemain timnas, spesialis transition play.",
+    },
+    {
+      name: "Larasati Putri",
+      level: "Senior",
+      status: "active",
+      color: "#14B8A6",
+      ratePerHour: 280_000,
+      specialties: ["Beginner Onboarding", "Footwork", "Volley"],
+      bio: "Sabar dan metodis, favorit pemain pemula.",
+    },
+    {
+      name: "Marco Alvarez",
+      level: "Pro",
+      status: "active",
+      color: "#F59E0B",
+      ratePerHour: 400_000,
+      specialties: ["Smash", "Power Play", "Doubles Tactics"],
+      bio: "Pengalaman sirkuit pro Spanyol, sesi intensitas tinggi.",
+    },
+    {
+      name: "Reza Mahendra",
+      level: "Assistant",
+      status: "active",
+      color: "#EC4899",
+      ratePerHour: 200_000,
+      specialties: ["Kids Program", "Ball Feeding", "Drills"],
+      bio: "Energik, menangani akademi junior & sesi drill grup.",
+    },
+  ];
+  for (const c of sampleCoaches) {
+    const exists = await tenant.m_coach.findFirst({
+      where: { companyId: COMPANY_ID, name: c.name, isDeleted: 0 },
+    });
+    if (!exists) {
+      await tenant.m_coach.create({
+        data: {
+          companyId: COMPANY_ID,
+          ...c,
+          specialties: c.specialties as object,
+          availability: defaultAvailability as object,
+          createdBy: "seed",
+        },
+      });
+    }
+  }
+
+  console.log("→ Seeding tenant: coach packages");
+  const samplePackages = [
+    { name: "Starter · 4 Sesi", sessions: 4, durationMin: 60, price: 1_200_000, color: "#14B8A6", sortOrder: 0 },
+    { name: "Intensive · 8 Sesi", sessions: 8, durationMin: 60, price: 2_200_000, color: "#6D5BFF", sortOrder: 1 },
+    { name: "Pro · 12 Sesi", sessions: 12, durationMin: 90, price: 3_600_000, color: "#F59E0B", sortOrder: 2 },
+  ];
+  for (const p of samplePackages) {
+    const exists = await tenant.m_coach_package.findFirst({
+      where: { companyId: COMPANY_ID, name: p.name, isDeleted: 0 },
+    });
+    if (!exists) {
+      await tenant.m_coach_package.create({
+        data: { companyId: COMPANY_ID, ...p, active: true, createdBy: "seed" },
       });
     }
   }

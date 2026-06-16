@@ -1,19 +1,26 @@
 "use client";
 
 // PadelHub — quick "register member" modal used inside the New Booking flow.
-// Minimal fields (nama, username, password, telepon, email) so front-desk can
-// register a login-capable member on the spot without leaving the booking
-// screen. Persists to the tenant DB via registerMemberAction. No membership
-// tier — tier economics are deferred. Returns the created Member to the caller.
+// Minimal fields (nama, username, password, telepon, email) plus an optional
+// membership plan, so front-desk can register a login-capable member on the
+// spot without leaving the booking screen. Persists to the tenant DB via
+// registerMemberAction. Returns the created Member to the caller.
 
 import React, { useEffect, useState } from "react";
 import { ModalDialog } from "@/components/ui/modal";
 import Button from "@/components/ui/button/Button";
 import TextInput from "@/components/ui/input/TextInput";
+import InputLabel from "@/components/ui/input/InputLabel";
+import Badge from "@/components/ui/badge/Badge";
 import PhoneInput, { type Country } from "@/components/ui/input/PhoneInput";
 import { useToast } from "@/components/ui/toast/ToastContext";
+import { formatIDR } from "@/components/club-core/format";
 import countriesData from "@/data/countries.json";
-import { registerMemberAction } from "@/app/(admin)/members/actions";
+import {
+  registerMemberAction,
+  getActivePlansAction,
+  type PlanOption,
+} from "@/app/(admin)/members/actions";
 
 const countries = countriesData as Country[];
 
@@ -48,9 +55,33 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // membership plans (from DB) — optional selection at quick register
+  const [plans, setPlans] = useState<PlanOption[]>([]);
+  const [planId, setPlanId] = useState<string | null>(null);
+
   // suggest a username from the typed name
   const suggestUsername = (n: string) =>
     n.trim().toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 20);
+
+  // load active plans once the modal first opens
+  useEffect(() => {
+    if (!isOpen) return;
+    let alive = true;
+    (async () => {
+      try {
+        const rows = await getActivePlansAction();
+        if (!alive) return;
+        setPlans(rows);
+        const def = rows.find((p) => p.highlighted) ?? rows[0] ?? null;
+        setPlanId((cur) => cur ?? (def ? def.id : null));
+      } catch {
+        if (alive) setPlans([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -63,6 +94,8 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
       setSaving(false);
     }
   }, [isOpen, initialName]);
+
+  const selectedPlan = plans.find((p) => p.id === planId) ?? null;
 
   const nameValid = name.trim().length >= 2;
   const usernameValid = username.trim().length >= 3;
@@ -81,6 +114,7 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
       password,
       phone,
       email: email.trim() || undefined,
+      planId,
     });
 
     if (!res.success || !res.memberNo || !res.id) {
@@ -94,7 +128,7 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
       id: res.id,
       name: name.trim(),
       phone,
-      tier: "daily",
+      tier: selectedPlan ? selectedPlan.name.toLowerCase() : "daily",
     });
     onClose();
   };
@@ -104,7 +138,7 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title="Register Member Baru"
-      description="Daftar cepat member (bisa login) untuk melanjutkan booking."
+      description="Daftar cepat member (bisa login) + pilih membership untuk melanjutkan booking."
       size="md"
       footer={
         <div className="flex justify-end gap-2">
@@ -182,6 +216,87 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
           placeholder="cth. andi@email.com"
           validate
         />
+
+        {/* Membership plan (optional) */}
+        {plans.length > 0 && (
+          <div>
+            <InputLabel
+              label="Membership (opsional)"
+              tooltip="Plan menentukan join fee, kuota booking gratis, dan diskon. Pilih 'Tanpa plan' untuk member walk-in biasa."
+            />
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              {/* no-plan option */}
+              <button
+                type="button"
+                onClick={() => setPlanId(null)}
+                className={[
+                  "rounded-xl border p-3 text-left transition-all",
+                  planId === null
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
+                    : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
+                ].join(" ")}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-[var(--text-heading)]">
+                    Tanpa plan
+                  </span>
+                  <span className="text-xs font-medium text-[var(--text-caption)]">
+                    Gratis
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-[var(--text-caption)]">
+                  Walk-in, bayar penuh per booking.
+                </p>
+              </button>
+
+              {plans.map((p) => {
+                const active = p.id === planId;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setPlanId(p.id)}
+                    className={[
+                      "rounded-xl border p-3 text-left transition-all",
+                      active
+                        ? "border-[var(--color-primary)] bg-[var(--color-primary-light)] ring-2 ring-[var(--color-primary)]/30"
+                        : "border-[var(--border-default)] bg-[var(--surface-card)] hover:border-[var(--color-primary)]/40",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className="rounded-full px-2 py-0.5 text-xs font-semibold text-white"
+                        style={{ background: p.color }}
+                      >
+                        {p.name}
+                      </span>
+                      <span className="text-xs font-bold text-[var(--text-heading)]">
+                        {p.joinFee === 0 ? "Gratis" : formatIDR(p.joinFee)}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {p.includedCourtBookings > 0 && (
+                        <Badge size="sm" color="info" variant="light">
+                          {p.includedCourtBookings}x gratis
+                        </Badge>
+                      )}
+                      {p.courtDiscountPct > 0 && (
+                        <Badge size="sm" color="success" variant="light">
+                          {p.courtDiscountPct}% off
+                        </Badge>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {selectedPlan && selectedPlan.joinFee > 0 && (
+              <p className="mt-2 text-xs text-[var(--text-caption)]">
+                Join fee {formatIDR(selectedPlan.joinFee)} ditagih saat pembayaran.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </ModalDialog>
   );

@@ -18,7 +18,7 @@ import { seedMenuItems, type MenuItem } from "@/data/padel/menus";
 // Bumped to v6 to force a reseed: parent/group menu icons now use distinct
 // lucide names (Booking & Check-in, Manage Member, Coaching, Finance,
 // Marketing, Master) instead of the generic "List" fallback.
-const STORAGE_KEY = "padelhub-menu-items-v13";
+const STORAGE_KEY = "padelhub-menu-items-v14";
 
 export interface MenuTree extends MenuItem {
   children: MenuItem[];

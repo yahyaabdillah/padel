@@ -1,6 +1,9 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { writeFile, mkdir } from "fs/promises";
+import path from "path";
+import { randomUUID } from "crypto";
 import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
@@ -22,6 +25,42 @@ export type Court = {
   note?: string | null;
   image?: string | null;
 };
+
+/**
+ * Persist a cropped court image (data URL) to /public/images/courts and return
+ * its public path. Replaces the previous inline-base64 approach so the DB only
+ * stores a short path.
+ */
+export async function uploadCourtImageAction(
+  dataUrl: string,
+): Promise<{ success: boolean; path?: string; error?: string }> {
+  const cookieStore = await cookies();
+  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!raw) return { success: false, error: "Not authenticated." };
+
+  const match = /^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/.exec(dataUrl);
+  if (!match) return { success: false, error: "Format gambar tidak valid." };
+
+  const mime = match[1];
+  const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+  const buffer = Buffer.from(match[3], "base64");
+
+  // basic size guard (~8MB decoded)
+  if (buffer.byteLength > 8 * 1024 * 1024) {
+    return { success: false, error: "Ukuran gambar melebihi 8MB." };
+  }
+
+  try {
+    const dir = path.join(process.cwd(), "public", "images", "courts");
+    await mkdir(dir, { recursive: true });
+    const filename = `court-${randomUUID()}.${ext}`;
+    await writeFile(path.join(dir, filename), buffer);
+    return { success: true, path: `/images/courts/${filename}` };
+  } catch (err) {
+    console.error("[uploadCourtImageAction] error:", err);
+    return { success: false, error: "Gagal menyimpan gambar." };
+  }
+}
 
 export async function getCourtsAction(): Promise<Court[]> {
   const cookieStore = await cookies();

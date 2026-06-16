@@ -50,10 +50,11 @@ export type CreateBookingsResult = {
 };
 
 /** Persist a booking TRANSACTION (header + detail lines) for the tenant.
- * Optionally burn N membership-quota slots for the member. */
+ * Optionally burn N membership-quota slots for the member, and optionally
+ * collect the member's outstanding membership join fee in the same checkout. */
 export async function createBookingsAction(
   input: CreateBookingInput,
-  opts?: { memberId?: string; quotaConsumed?: number },
+  opts?: { memberId?: string; quotaConsumed?: number; joinFee?: number },
 ): Promise<CreateBookingsResult> {
   try {
     const session = await requireSession();
@@ -61,8 +62,9 @@ export async function createBookingsAction(
     if (!input.details.length) return { success: false, error: "No bookings." };
 
     const db = await getTenantDb();
-    const totalPrice = input.details.reduce((s, d) => s + d.price, 0);
+    const courtTotal = input.details.reduce((s, d) => s + d.price, 0);
     const quotaConsumed = opts?.quotaConsumed ?? 0;
+    const joinFee = Math.max(0, opts?.joinFee ?? 0);
 
     const header = await db.t_booking.create({
       data: {
@@ -72,9 +74,10 @@ export async function createBookingsAction(
         status: input.status,
         customer: input.customer,
         paymentMethod: input.paymentMethod ?? null,
-        totalPrice,
+        totalPrice: courtTotal + joinFee,
+        joinFee,
         quotaConsumed,
-        note: input.note ?? null,
+        note: input.note ?? (joinFee > 0 ? `Termasuk join fee ${joinFee}` : null),
         ...auditCreate(session.userId),
         details: {
           create: input.details.map((d) => ({
@@ -94,12 +97,13 @@ export async function createBookingsAction(
       },
     });
 
-    // burn membership quota if this transaction consumed it
-    if (opts?.memberId && quotaConsumed > 0) {
+    // update the member: burn quota and/or settle the join fee
+    if (opts?.memberId && (quotaConsumed > 0 || joinFee > 0)) {
       await db.t_member.updateMany({
         where: { id: opts.memberId, companyId: session.companyId, ...NOT_DELETED },
         data: {
-          quotaUsed: { increment: quotaConsumed },
+          ...(quotaConsumed > 0 && { quotaUsed: { increment: quotaConsumed } }),
+          ...(joinFee > 0 && { joinFeePaid: true }),
           ...auditUpdate(session.userId),
         },
       });
@@ -127,6 +131,8 @@ export type BookingMember = {
   } | null;
   /** free quota still available this cycle */
   quotaRemaining: number;
+  /** outstanding one-time join fee to collect (0 = none / already paid) */
+  joinFeeDue: number;
 };
 
 /** Resolve a single member + their live membership benefit (for payment). */
@@ -144,6 +150,7 @@ export async function getMemberByIdAction(
 
   let plan: BookingMember["plan"] = null;
   let quotaRemaining = 0;
+  let joinFeeDue = 0;
   if (m.plan && m.plan.isDeleted === 0) {
     // roll the cycle if it has elapsed
     let used = m.quotaUsed;
@@ -160,6 +167,7 @@ export async function getMemberByIdAction(
       courtDiscountPct: m.plan.courtDiscountPct,
     };
     quotaRemaining = Math.max(0, m.plan.includedCourtBookings - used);
+    if (!m.joinFeePaid) joinFeeDue = m.plan.joinFee;
   }
 
   return {
@@ -169,6 +177,7 @@ export async function getMemberByIdAction(
     tier: m.tier,
     plan,
     quotaRemaining,
+    joinFeeDue,
   };
 }
 

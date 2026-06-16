@@ -196,17 +196,18 @@ export const clubNav: NavItem[] = [
   //   group: "main",
   // },
   // ── LAINNYA ──
-  // {
-  //   name: "Coaching",
-  //   icon: icon(<TrainerIcon className="h-5 w-5" />),
-  //   requiredAny: ["coaching.view"],
-  //   requiredRolesAny: clubRoles,
-  //   group: "others",
-  //   subItems: [
-  //     { name: "Coach Data", path: "/coaching", requiredAny: ["coaching.view"] },
-  //     { name: "Jadwal Coach", path: "/coaching/schedule", requiredAny: ["coaching.view"] },
-  //   ],
-  // },
+  {
+    name: "Coaching",
+    icon: icon(<TrainerIcon className="h-5 w-5" />),
+    requiredAny: ["coaching.view"],
+    requiredRolesAny: clubRoles,
+    group: "others",
+    subItems: [
+      { name: "Coach", path: "/coaching/coaches", requiredAny: ["coaching.view"] },
+      { name: "Coach Schedule", path: "/coaching/schedule", requiredAny: ["coaching.view"], badge: "new" },
+      { name: "Coach Packages", path: "/coaching/packages", requiredAny: ["coaching.view"] },
+    ],
+  },
   // {
   //   name: "Finance",
   //   icon: icon(<DollarLineIcon className="h-5 w-5" />),
