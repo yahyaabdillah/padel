@@ -105,12 +105,11 @@ export const OperatingHoursProvider: React.FC<{ children: React.ReactNode }> = (
 
   const updateDay = useCallback(
     (day: number, patch: Partial<Omit<DayOperatingHours, "day">>) => {
-      setHours((prev) => {
-        const next = prev.map((h) => (h.day === day ? { ...h, ...patch } : h));
-        // persist async
-        updateOperatingHourAction(day, patch).catch(console.error);
-        return next;
-      });
+      setHours((prev) =>
+        prev.map((h) => (h.day === day ? { ...h, ...patch } : h)),
+      );
+      // persist async (outside the state updater to avoid setState-in-render)
+      updateOperatingHourAction(day, patch).catch(console.error);
     },
     [],
   );

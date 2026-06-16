@@ -73,9 +73,9 @@ export async function authenticateCustom(
     },
   });
 
-  // ── No internal user? Try the member portal (separate m_member table). ──
+  // ── No internal user? Try the member portal (separate t_member table). ──
   if (!user) {
-    const member = await tenantDb.m_member.findFirst({
+    const member = await tenantDb.t_member.findFirst({
       where: {
         companyId: company,
         username: userId.trim().toLowerCase(),
@@ -90,7 +90,7 @@ export async function authenticateCustom(
     const memberLevel = await resolveRoleLevel("member");
     const memberVersion = await getActiveVersion();
     try {
-      await tenantDb.m_member.update({
+      await tenantDb.t_member.update({
         where: { id: member.id },
         data: { lastLogin: new Date() },
       });

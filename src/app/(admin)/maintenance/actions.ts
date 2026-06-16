@@ -51,7 +51,7 @@ export async function getMaintenanceAction(): Promise<MaintenanceRecord[]> {
   const session = await requireSession();
   if (!session) return [];
   const db = await getTenantDb();
-  const rows = await db.m_court_maintenance.findMany({
+  const rows = await db.t_court_maintenance.findMany({
     where: { companyId: session.companyId, ...NOT_DELETED },
     orderBy: { start: "asc" },
     include: { court: { select: { name: true, color: true } } },
@@ -85,7 +85,7 @@ export async function createMaintenanceAction(
     }
 
     const db = await getTenantDb();
-    const created = await db.m_court_maintenance.create({
+    const created = await db.t_court_maintenance.create({
       data: {
         companyId: session.companyId,
         courtId: input.courtId,
@@ -112,7 +112,7 @@ export async function updateMaintenanceAction(
   const session = await requireSession();
   if (!session) return { success: false, error: "Not authenticated." };
   const db = await getTenantDb();
-  await db.m_court_maintenance.updateMany({
+  await db.t_court_maintenance.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: {
       ...(patch.courtId !== undefined && { courtId: patch.courtId }),
@@ -134,7 +134,7 @@ export async function deleteMaintenanceAction(
   const session = await requireSession();
   if (!session) return { success: false };
   const db = await getTenantDb();
-  await db.m_court_maintenance.updateMany({
+  await db.t_court_maintenance.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: auditSoftDelete(session.userId),
   });

@@ -1,17 +1,20 @@
 "use client";
 
-// PadelHub — booking payment step. Reached after picking a court + one or more
-// hourly slots + a member in the New Booking search flow. Reads the pending
-// booking from URL params (slots = comma-separated storage-slot indices), shows
-// a payment summary + method picker, and on confirm creates one 60-min booking
-// per selected slot via useClubData.addBooking, then shows a receipt.
+// PadelHub — booking payment step (multi-item cart). Reached after picking a
+// court + time + member. The cart is seeded from the URL (court/date/slots) but
+// the user can ADD more bookings (another court / date / time) right here before
+// paying. Membership benefit (quota + discount) is applied across the whole cart.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check } from "lucide-react";
+import { Check, Plus, Trash2, Clock, Search, ArrowLeft } from "lucide-react";
 import Card from "@/components/ui/card/Card";
 import Button from "@/components/ui/button/Button";
 import TextInput from "@/components/ui/input/TextInput";
+import DatePicker from "@/components/ui/datepicker/DatePicker";
+import TimePicker from "@/components/ui/datepicker/TimePicker";
+import { ModalDialog } from "@/components/ui/modal";
+import EmptyState from "@/components/ui/feedback/EmptyState";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { useClubData } from "@/components/club-core/ClubDataContext";
 import { calcMembershipBenefit } from "@/lib/membership-benefit";
@@ -27,13 +30,18 @@ import {
   STORAGE_SLOT_MINUTES,
   slotLabel,
   courtRateAtSlot,
+  courtAvailableSlots,
+  hourToSlot,
+  occupiedSlotsFor,
+  type BlockingWindow,
   type Court,
 } from "@/data/padel/club/courts";
+import { dateKey as toDateKey } from "@/data/padel/club/bookings";
 import { paymentMethods, type PaymentMethod } from "@/data/padel/engage/products";
 
 const pad = (n: number) => String(n).padStart(2, "0");
+const todayKey = "2026-06-02";
 
-/** Sessions are fixed at 60 minutes. */
 const SESSION_MINUTES = 60;
 const SLOTS_PER_SESSION = SESSION_MINUTES / STORAGE_SLOT_MINUTES; // 2
 
@@ -43,6 +51,14 @@ interface BookingPaymentProps {
   /** storage-slot indices (0–47), one per chosen 60-min session */
   startSlots: number[];
   memberId: string;
+}
+
+/** A booking line in the cart. */
+interface CartItem {
+  id: string;
+  courtId: string;
+  dateKey: string;
+  startSlot: number;
 }
 
 /** Price (IDR) for a single 60-min session starting at `startSlot`. */
@@ -55,19 +71,32 @@ const sessionPrice = (court: Court, day: number, startSlot: number): number => {
   return Math.round(total);
 };
 
+let cartSeq = 0;
+const nextCartId = () => `c-${Date.now().toString(36)}-${cartSeq++}`;
+
 export default function BookingPayment({
   courtId,
-  dateKey: bookingDate,
+  dateKey: initialDate,
   startSlots,
   memberId,
 }: BookingPaymentProps) {
   const router = useRouter();
   const toast = useToast();
-  const { courts, isReady } = useClubData();
+  const { courts, bookings, maintenance, isReady } = useClubData();
 
-  const court = useMemo(
-    () => courts.find((c) => c.id === courtId) ?? seedCourtById(courtId),
-    [courts, courtId],
+  const findCourt = (id: string): Court | undefined =>
+    courts.find((c) => c.id === id) ?? seedCourtById(id);
+
+  // ── cart (seeded from URL) ──
+  const [cart, setCart] = useState<CartItem[]>(() =>
+    [...startSlots]
+      .sort((a, b) => a - b)
+      .map((startSlot) => ({
+        id: nextCartId(),
+        courtId,
+        dateKey: initialDate,
+        startSlot,
+      })),
   );
 
   // resolve member live from the tenant DB
@@ -76,8 +105,7 @@ export default function BookingPayment({
   useEffect(() => {
     (async () => {
       try {
-        const m = await getMemberByIdAction(memberId);
-        setMember(m);
+        setMember(await getMemberByIdAction(memberId));
       } catch {
         setMember(null);
       } finally {
@@ -91,35 +119,33 @@ export default function BookingPayment({
   const [confirmedRef, setConfirmedRef] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const day = useMemo(
-    () => new Date(`${bookingDate}T00:00:00`).getDay(),
-    [bookingDate],
-  );
-
-  // sorted sessions with labels + per-session price
+  // ── derive priced sessions from the cart ──
   const sessions = useMemo(() => {
-    if (!court) return [];
-    return [...startSlots]
-      .sort((a, b) => a - b)
-      .map((startSlot) => {
-        const endSlot = startSlot + SLOTS_PER_SESSION;
+    return cart
+      .map((item) => {
+        const court = findCourt(item.courtId);
+        if (!court) return null;
+        const day = new Date(`${item.dateKey}T00:00:00`).getDay();
+        const endSlot = item.startSlot + SLOTS_PER_SESSION;
         return {
-          startSlot,
+          ...item,
+          court,
           endSlot,
-          startLabel: slotLabel(startSlot),
+          startLabel: slotLabel(item.startSlot),
           endLabel: slotLabel(endSlot),
-          price: sessionPrice(court, day, startSlot),
+          price: sessionPrice(court, day, item.startSlot),
         };
-      });
-  }, [court, startSlots, day]);
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart, courts]);
 
   const totalPrice = useMemo(
     () => sessions.reduce((sum, s) => sum + s.price, 0),
     [sessions],
   );
 
-  // ── apply membership benefit (quota + post-quota discount) ──
-  // Plan + remaining quota come live from the member record (DB).
+  // ── membership benefit across the whole cart ──
   const plan = member?.plan ?? null;
   const benefit = useMemo(
     () =>
@@ -131,10 +157,7 @@ export default function BookingPayment({
             }
           : null,
         quotaRemaining: member?.quotaRemaining ?? 0,
-        sessions: sessions.map((s) => ({
-          basePrice: s.price,
-          label: `${s.startLabel}–${s.endLabel}`,
-        })),
+        sessions: sessions.map((s) => ({ basePrice: s.price })),
       }),
     [plan, member?.quotaRemaining, sessions],
   );
@@ -144,53 +167,63 @@ export default function BookingPayment({
   const change = method === "Cash" ? cashNum - payableTotal : 0;
   const cashShort = method === "Cash" && cashNum < payableTotal;
 
+  const removeItem = (id: string) =>
+    setCart((prev) => prev.filter((c) => c.id !== id));
+
+  // ── add-booking modal ──
+  const [addOpen, setAddOpen] = useState(false);
+
   const pay = async () => {
-    if (!court || !member || sessions.length === 0 || saving) return;
+    if (!member || sessions.length === 0 || saving) return;
     if (cashShort) {
       toast.warning("Uang tunai kurang dari total.");
       return;
     }
     setSaving(true);
 
-    const payload = sessions.map((s, idx) => {
+    const details = sessions.map((s, idx) => {
       const startH = Math.floor(s.startSlot / 2);
       const startM = (s.startSlot % 2) * 30;
       const endH = Math.floor(s.endSlot / 2);
       const endM = (s.endSlot % 2) * 30;
       const line = benefit.sessions[idx];
-      const note = line?.coveredByQuota
-        ? `Gratis kuota membership · bayar ${method}`
+      const rateNote = line?.coveredByQuota
+        ? "free"
         : line && line.discountPct > 0
-          ? `Diskon ${line.discountPct}% · bayar ${method}`
-          : `Dibayar via ${method}`;
+          ? `discount-${line.discountPct}`
+          : "regular";
       return {
-        courtId: court.id,
-        memberId: member.id,
-        type: (member.tier === "daily" ? "walk_in" : "member") as
-          | "walk_in"
-          | "member",
-        status: "confirmed" as const,
-        customer: member.name,
-        start: `${bookingDate}T${pad(startH)}:${pad(startM)}:00`,
-        end: `${bookingDate}T${pad(endH)}:${pad(endM)}:00`,
-        partySize: court.format === "single" ? 2 : 4,
-        // charge the benefit-adjusted amount (quota → 0, else rate − discount)
+        courtId: s.courtId,
+        start: `${s.dateKey}T${pad(startH)}:${pad(startM)}:00`,
+        end: `${s.dateKey}T${pad(endH)}:${pad(endM)}:00`,
+        partySize: s.court.format === "single" ? 2 : 4,
+        basePrice: s.price,
         price: line?.payable ?? s.price,
-        note,
+        rateNote,
       };
     });
 
-    const res = await createBookingsAction(payload, {
-      memberId: member.id,
-      quotaConsumed: benefit.quotaCoveredCount,
-    });
-    if (!res.success || !res.ids?.length) {
+    const res = await createBookingsAction(
+      {
+        memberId: member.id,
+        type: member.tier === "daily" ? "walk_in" : "member",
+        status: "confirmed",
+        customer: member.name,
+        paymentMethod: method,
+        details,
+      },
+      {
+        memberId: member.id,
+        quotaConsumed: benefit.quotaCoveredCount,
+      },
+    );
+    if (!res.success || !res.id) {
       toast.error(res.error || "Gagal menyimpan booking.", "Pembayaran gagal");
       setSaving(false);
       return;
     }
 
-    setConfirmedRef(res.ids[0]);
+    setConfirmedRef(res.id);
     toast.success(
       `Pembayaran ${formatIDR(payableTotal)} diterima.`,
       `${sessions.length} booking dikonfirmasi`,
@@ -208,12 +241,12 @@ export default function BookingPayment({
     );
   }
 
-  if (!court || !member || sessions.length === 0) {
+  if (!member) {
     return (
       <Card padding="lg">
         <div className="py-10 text-center">
           <p className="text-sm text-[var(--text-caption)]">
-            Data booking tidak lengkap atau sudah kedaluwarsa.
+            Data member tidak ditemukan atau sudah kedaluwarsa.
           </p>
           <div className="mt-4">
             <Button variant="outline" onClick={() => router.push("/bookings/search")}>
@@ -227,6 +260,7 @@ export default function BookingPayment({
 
   // ── success / receipt ──
   if (confirmedRef) {
+    const courtNames = Array.from(new Set(sessions.map((s) => s.court.name)));
     return (
       <Card padding="lg">
         <div className="mx-auto max-w-md py-6 text-center">
@@ -239,19 +273,13 @@ export default function BookingPayment({
               : "Booking dikonfirmasi"}
           </h3>
           <p className="mt-1 text-sm text-[var(--text-caption)]">
-            {court.name} · {bookingDate} · {sessions.length} jam — ref{" "}
+            {courtNames.join(", ")} — ref{" "}
             <span className="font-mono font-semibold">{confirmedRef}</span>
           </p>
           <div className="mx-auto mt-5 max-w-xs rounded-xl border border-[var(--border-default)] bg-[var(--surface-muted)] p-4 text-left text-sm">
             <div className="flex justify-between">
               <span className="text-[var(--text-caption)]">Member</span>
               <span className="font-medium text-[var(--text-heading)]">{member.name}</span>
-            </div>
-            <div className="mt-1.5 flex justify-between">
-              <span className="text-[var(--text-caption)]">Jam</span>
-              <span className="text-right font-medium text-[var(--text-heading)]">
-                {sessions.map((s) => `${s.startLabel}–${s.endLabel}`).join(", ")}
-              </span>
             </div>
             <div className="mt-1.5 flex justify-between">
               <span className="text-[var(--text-caption)]">Metode</span>
@@ -291,8 +319,86 @@ export default function BookingPayment({
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      {/* ── Payment ── */}
-      <div className="lg:col-span-2">
+      {/* ── Left: cart + payment ── */}
+      <div className="space-y-6 lg:col-span-2">
+        {/* cart */}
+        <Card padding="lg">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="text-lg font-semibold text-[var(--text-heading)]">
+              Daftar Booking
+            </h3>
+            <Button
+              variant="outline"
+              size="sm"
+              startIcon={<Plus className="h-4 w-4" />}
+              onClick={() => setAddOpen(true)}
+            >
+              Tambah booking
+            </Button>
+          </div>
+
+          {sessions.length === 0 ? (
+            <EmptyState
+              title="Belum ada booking"
+              description="Tambahkan minimal satu sesi untuk melanjutkan pembayaran."
+            />
+          ) : (
+            <div className="space-y-2.5">
+              {sessions.map((s, idx) => {
+                const line = benefit.sessions[idx];
+                return (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-3"
+                  >
+                    <span
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+                      style={{ background: s.court.color }}
+                    >
+                      {s.court.name.slice(0, 2).toUpperCase()}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-[var(--text-heading)]">
+                        {s.court.name}
+                      </p>
+                      <p className="truncate text-xs text-[var(--text-caption)]">
+                        {s.dateKey} · {s.startLabel}–{s.endLabel}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      {line?.coveredByQuota ? (
+                        <ToneBadge tone="success">Gratis kuota</ToneBadge>
+                      ) : line && line.discountPct > 0 ? (
+                        <div className="flex flex-col items-end">
+                          <span className="text-xs text-[var(--text-muted)] line-through">
+                            {formatIDR(s.price)}
+                          </span>
+                          <span className="text-sm font-semibold text-[var(--text-heading)]">
+                            {formatIDR(line.payable)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-sm font-semibold text-[var(--text-heading)]">
+                          {formatIDR(s.price)}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeItem(s.id)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-rose-50 hover:text-rose-500 dark:hover:bg-rose-500/10"
+                      aria-label="Hapus booking"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        {/* payment */}
         <Card padding="lg">
           <h3 className="mb-1 text-lg font-semibold text-[var(--text-heading)]">
             Pembayaran
@@ -342,70 +448,42 @@ export default function BookingPayment({
             <Button variant="outline" onClick={() => router.push("/bookings/search")}>
               Kembali
             </Button>
-            <Button variant="primary" sheen glow onClick={pay} disabled={saving}>
+            <Button
+              variant="primary"
+              sheen
+              glow
+              onClick={pay}
+              disabled={saving || sessions.length === 0}
+            >
               {saving ? "Menyimpan…" : `Bayar · ${formatIDR(payableTotal)}`}
             </Button>
           </div>
         </Card>
       </div>
 
-      {/* ── Summary ── */}
+      {/* ── Right: summary ── */}
       <div className="lg:col-span-1">
         <div className="lg:sticky lg:top-24">
-          <Card variant="accent-top" accentColor={court.color} padding="md">
+          <Card variant="accent-top" accentColor={sessions[0]?.court.color ?? "#6D5BFF"} padding="md">
             <div className="mb-3 flex items-center justify-between">
               <span className="text-sm font-semibold text-[var(--text-heading)]">
-                Ringkasan booking
+                Ringkasan
               </span>
               <ToneBadge tone={plan ? "primary" : "neutral"}>
                 {plan ? plan.name : "Non-member"}
               </ToneBadge>
             </div>
             <dl className="space-y-2.5 text-sm">
-              <Row label="Lapangan" value={court.name} />
-              <Row label="Tanggal" value={bookingDate} />
               <Row label="Member" value={member.name} />
+              <Row label="Jumlah sesi" value={`${sessions.length} booking`} />
+              {plan && (
+                <Row
+                  label="Sisa kuota"
+                  value={`${Math.max((member.quotaRemaining ?? 0) - benefit.quotaCoveredCount, 0)} / ${plan.includedCourtBookings}`}
+                />
+              )}
             </dl>
 
-            {/* per-session breakdown (with benefit) */}
-            <div className="mt-3 space-y-1.5 border-t border-[var(--border-default)] pt-3">
-              {sessions.map((s, idx) => {
-                const line = benefit.sessions[idx];
-                return (
-                  <div
-                    key={s.startSlot}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <span className="text-[var(--text-caption)]">
-                      {s.startLabel}–{s.endLabel}
-                    </span>
-                    {line?.coveredByQuota ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-xs text-[var(--text-muted)] line-through">
-                          {formatIDR(s.price)}
-                        </span>
-                        <ToneBadge tone="success">Gratis</ToneBadge>
-                      </span>
-                    ) : line && line.discountPct > 0 ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-xs text-[var(--text-muted)] line-through">
-                          {formatIDR(s.price)}
-                        </span>
-                        <span className="font-medium text-[var(--text-heading)]">
-                          {formatIDR(line.payable)}
-                        </span>
-                      </span>
-                    ) : (
-                      <span className="font-medium text-[var(--text-heading)]">
-                        {formatIDR(s.price)}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* savings + total */}
             <div className="mt-3 space-y-1.5 border-t border-[var(--border-default)] pt-3 text-sm">
               <div className="flex items-center justify-between text-[var(--text-caption)]">
                 <span>Subtotal</span>
@@ -425,9 +503,7 @@ export default function BookingPayment({
             </div>
 
             <div className="mt-3 border-t border-[var(--border-default)] pt-4">
-              <p className="text-sm text-[var(--text-caption)]">
-                Total bayar · {sessions.length} jam
-              </p>
+              <p className="text-sm text-[var(--text-caption)]">Total bayar</p>
               <p className="mt-1 text-3xl font-bold text-brand-600 dark:text-brand-400">
                 {formatIDR(payableTotal)}
               </p>
@@ -435,6 +511,20 @@ export default function BookingPayment({
           </Card>
         </div>
       </div>
+
+      {/* ── Add-booking modal ── */}
+      <AddBookingModal
+        isOpen={addOpen}
+        onClose={() => setAddOpen(false)}
+        courts={courts}
+        bookings={bookings}
+        maintenance={maintenance}
+        cart={cart}
+        onAdd={(item) => {
+          setCart((prev) => [...prev, { ...item, id: nextCartId() }]);
+          setAddOpen(false);
+        }}
+      />
     </div>
   );
 }
@@ -445,3 +535,285 @@ const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value
     <dd className="text-right font-medium text-[var(--text-heading)]">{value}</dd>
   </div>
 );
+
+/* ════════════════════════════════════════════════════════
+ * Add-booking modal — time-first (matches the main New Booking flow):
+ * pick date + earliest time → list available start times across courts →
+ * pick a time → pick a court available at that time.
+ * ════════════════════════════════════════════════════════ */
+interface AddBookingModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  courts: Court[];
+  bookings: { courtId: string; status: string; start: string; end: string }[];
+  maintenance: { courtId: string; start: string; end: string }[];
+  cart: CartItem[];
+  onAdd: (item: Omit<CartItem, "id">) => void;
+}
+
+interface TimeOpt {
+  startSlot: number;
+  startLabel: string;
+  endLabel: string;
+  courtCount: number;
+}
+interface CourtOpt {
+  court: Court;
+  price: number;
+  hasPeak: boolean;
+}
+
+const AddBookingModal: React.FC<AddBookingModalProps> = ({
+  isOpen,
+  onClose,
+  courts,
+  bookings,
+  maintenance,
+  cart,
+  onAdd,
+}) => {
+  const activeCourts = useMemo(
+    () => courts.filter((c) => c.status === "active"),
+    [courts],
+  );
+  const [date, setDate] = useState<Date>(new Date(`${todayKey}T00:00:00`));
+  const [startTime, setStartTime] = useState("07:00");
+  const [results, setResults] = useState<TimeOpt[] | null>(null);
+  const [searchedKey, setSearchedKey] = useState("");
+  const [pickedSlot, setPickedSlot] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDate(new Date(`${todayKey}T00:00:00`));
+      setStartTime("07:00");
+      setResults(null);
+      setPickedSlot(null);
+      setSearchedKey("");
+    }
+  }, [isOpen]);
+
+  const timeToSlot = (t: string): number => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+    if (!m) return 0;
+    return hourToSlot(Number(m[1])) + (Number(m[2]) >= 30 ? 1 : 0);
+  };
+
+  const occupiedFor = (courtId: string, key: string): Set<number> => {
+    const blockers: BlockingWindow[] = [
+      ...bookings
+        .filter((b) => b.status !== "cancelled")
+        .map((b) => ({ courtId: b.courtId, start: b.start, end: b.end })),
+      ...maintenance.map((m) => ({ courtId: m.courtId, start: m.start, end: m.end })),
+    ];
+    const occ = occupiedSlotsFor(courtId, key, blockers);
+    cart
+      .filter((c) => c.courtId === courtId && c.dateKey === key)
+      .forEach((c) => {
+        occ.add(c.startSlot);
+        occ.add(c.startSlot + 1);
+      });
+    return occ;
+  };
+
+  const runSearch = () => {
+    const key = toDateKey(date);
+    const day = date.getDay();
+    const fromSlot = timeToSlot(startTime);
+    const countBySlot = new Map<number, number>();
+    activeCourts.forEach((court) => {
+      courtAvailableSlots(
+        court,
+        day,
+        SESSION_MINUTES,
+        occupiedFor(court.id, key),
+        SESSION_MINUTES,
+      )
+        .filter((s) => s.startSlot >= fromSlot)
+        .forEach((s) => {
+          countBySlot.set(s.startSlot, (countBySlot.get(s.startSlot) ?? 0) + 1);
+        });
+    });
+    const opts: TimeOpt[] = Array.from(countBySlot.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([startSlot, courtCount]) => ({
+        startSlot,
+        startLabel: slotLabel(startSlot),
+        endLabel: slotLabel(startSlot + SLOTS_PER_SESSION),
+        courtCount,
+      }));
+    setSearchedKey(key);
+    setPickedSlot(null);
+    setResults(opts);
+  };
+
+  // courts available at the picked time
+  const courtsAtPicked: CourtOpt[] = useMemo(() => {
+    if (pickedSlot == null || !searchedKey) return [];
+    const day = new Date(`${searchedKey}T00:00:00`).getDay();
+    const out: CourtOpt[] = [];
+    for (const court of activeCourts) {
+      const slot = courtAvailableSlots(
+        court,
+        day,
+        SESSION_MINUTES,
+        occupiedFor(court.id, searchedKey),
+        SESSION_MINUTES,
+      ).find((s) => s.startSlot === pickedSlot);
+      if (slot) out.push({ court, price: slot.price, hasPeak: slot.hasPeak });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedSlot, searchedKey, activeCourts, bookings, maintenance, cart]);
+
+  return (
+    <ModalDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Tambah Booking"
+      description="Pilih tanggal & jam, lalu pilih lapangan yang tersedia."
+      size="lg"
+      footer={
+        <div className="flex justify-end">
+          <Button variant="outline" onClick={onClose}>
+            Tutup
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        {/* Step 1: date + time + search */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <DatePicker
+            label="Tanggal main"
+            mode="single"
+            value={date}
+            minDate={new Date(`${todayKey}T00:00:00`)}
+            onChange={(v) => {
+              if (v instanceof Date) {
+                setDate(v);
+                setResults(null);
+                setPickedSlot(null);
+              }
+            }}
+          />
+          <TimePicker
+            label="Mulai dari jam"
+            value={startTime}
+            minuteStep={60}
+            placeholder="Pilih jam mulai"
+            onChange={(v) => {
+              setStartTime(v || "07:00");
+              setResults(null);
+              setPickedSlot(null);
+            }}
+          />
+          <Button
+            variant="primary"
+            sheen
+            startIcon={<Search className="h-4 w-4" />}
+            onClick={runSearch}
+            className="h-11"
+          >
+            Cari
+          </Button>
+        </div>
+
+        {/* Step 2: available times */}
+        {results !== null && pickedSlot == null && (
+          <div>
+            <p className="mb-2 text-xs text-[var(--text-caption)]">
+              {searchedKey} · {results.length} pilihan jam
+            </p>
+            {results.length === 0 ? (
+              <p className="rounded-lg bg-[var(--surface-muted)] px-3 py-6 text-center text-sm text-[var(--text-caption)]">
+                Tidak ada jam tersedia. Coba tanggal atau jam lain.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {results.map((t) => (
+                  <button
+                    key={t.startSlot}
+                    type="button"
+                    onClick={() => setPickedSlot(t.startSlot)}
+                    className="flex items-center gap-2.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-3 text-left transition-all hover:border-[var(--color-primary)] hover:ring-1 hover:ring-[var(--color-primary)]"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary-light)] text-[var(--color-primary)]">
+                      <Clock className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-[var(--text-heading)]">
+                        {t.startLabel}–{t.endLabel}
+                      </p>
+                      <p className="truncate text-xs text-[var(--text-caption)]">
+                        {t.courtCount} lapangan
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Step 3: courts at the picked time */}
+        {results !== null && pickedSlot != null && (
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs text-[var(--text-caption)]">
+                {searchedKey} · {slotLabel(pickedSlot)}–{slotLabel(pickedSlot + SLOTS_PER_SESSION)} ·{" "}
+                {courtsAtPicked.length} lapangan
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                startIcon={<ArrowLeft className="h-4 w-4" />}
+                onClick={() => setPickedSlot(null)}
+              >
+                Ganti jam
+              </Button>
+            </div>
+            {courtsAtPicked.length === 0 ? (
+              <p className="rounded-lg bg-[var(--surface-muted)] px-3 py-6 text-center text-sm text-[var(--text-caption)]">
+                Tidak ada lapangan tersedia di jam ini.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {courtsAtPicked.map(({ court, price, hasPeak }) => (
+                  <button
+                    key={court.id}
+                    type="button"
+                    onClick={() =>
+                      onAdd({ courtId: court.id, dateKey: searchedKey, startSlot: pickedSlot })
+                    }
+                    className="flex w-full items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-3 text-left transition-all hover:border-[var(--color-primary)] hover:ring-1 hover:ring-[var(--color-primary)]"
+                  >
+                    <span
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+                      style={{ background: court.color }}
+                    >
+                      {court.name.slice(0, 2).toUpperCase()}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-[var(--text-heading)]">
+                        {court.name}
+                      </p>
+                      <p className="truncate text-xs text-[var(--text-caption)]">
+                        {court.environment} · {court.wall} · {court.format}
+                      </p>
+                    </div>
+                    <span className="ml-auto flex shrink-0 items-center gap-2">
+                      {hasPeak && <ToneBadge tone="primary">peak</ToneBadge>}
+                      <span className="text-sm font-bold text-[var(--text-heading)]">
+                        {formatIDR(price, true)}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </ModalDialog>
+  );
+};

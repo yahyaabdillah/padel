@@ -11,7 +11,8 @@
     "db:push:master": "prisma db push --schema=prisma/master.prisma",
     "db:push:tenant": "prisma db push --schema=prisma/tenant.prisma",
     "db:push": "npm run db:push:master && npm run db:push:tenant",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset-transactional": "tsx prisma/reset-transactional.ts"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.19",

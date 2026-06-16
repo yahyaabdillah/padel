@@ -4,12 +4,14 @@
 // weekday. Court schedules lock any hour outside the day's operating window.
 
 import React from "react";
+import { Info } from "lucide-react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import Card from "@/components/ui/card/Card";
 import Badge from "@/components/ui/badge/Badge";
 import Button from "@/components/ui/button/Button";
 import Switch from "@/components/ui/switch/Switch";
 import InputLabel from "@/components/ui/input/InputLabel";
+import Tooltip from "@/components/ui/tooltip/Tooltip";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import {
   useOperatingHours,
@@ -96,20 +98,15 @@ export default function OperatingHoursMasterPage() {
           Atur jam buka klub tiap hari. Jadwal harga tiap lapangan otomatis
           mengunci jam di luar jam operasional ini.
         </p>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={copyMonToWeekdays}>
-            Salin Senin → Hari Kerja
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              reset();
-              toast.info("Jam operasional dikembalikan ke default.");
-            }}
-          >
-            Reset
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            reset();
+            toast.info("Jam operasional dikembalikan ke default.");
+          }}
+        >
+          Reset
+        </Button>
       </div>
 
       <Card padding="none">
@@ -117,56 +114,76 @@ export default function OperatingHoursMasterPage() {
           {ordered.map((h) => {
             const meta = weekdayMeta.find((w) => w.value === h.day)!;
             return (
-              <div
-                key={h.day}
-                className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center"
-              >
-                <div className="flex w-40 items-center gap-3">
-                  <Switch
-                    checked={h.open}
-                    onChange={(v) => updateDay(h.day, { open: v })}
-                  />
-                  <span className="font-medium text-[var(--text-heading)]">
-                    {meta.label}
-                  </span>
+              <div key={h.day} className="px-5 py-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                  <div className="flex w-40 items-center gap-3">
+                    <Switch
+                      checked={h.open}
+                      onChange={(v) => updateDay(h.day, { open: v })}
+                    />
+                    <span className="font-medium text-[var(--text-heading)]">
+                      {meta.label}
+                    </span>
+                  </div>
+
+                  {h.open ? (
+                    <div className="flex flex-1 flex-wrap items-center gap-x-5 gap-y-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                          Jam Buka
+                        </span>
+                        <HourSelect
+                          value={h.openStart}
+                          onChange={(v) =>
+                            updateDay(h.day, {
+                              openStart: v,
+                              openEnd: Math.max(h.openEnd, v + 1),
+                            })
+                          }
+                          options={Array.from({ length: 24 }, (_, i) => i).filter(
+                            (i) => i < h.openEnd,
+                          )}
+                        />
+                        <span className="text-[var(--text-muted)]">–</span>
+                        <HourSelect
+                          value={h.openEnd}
+                          onChange={(v) => updateDay(h.day, { openEnd: v })}
+                          options={Array.from({ length: 24 }, (_, i) => i + 1).filter(
+                            (i) => i > h.openStart,
+                          )}
+                        />
+                      </div>
+                      <Badge size="sm" color="success" variant="light">
+                        {h.openEnd - h.openStart} jam / hari
+                      </Badge>
+                    </div>
+                  ) : (
+                    <div className="flex-1">
+                      <Badge color="neutral" variant="light">
+                        Tutup
+                      </Badge>
+                    </div>
+                  )}
                 </div>
 
-                {h.open ? (
-                  <div className="flex flex-1 flex-wrap items-center gap-x-5 gap-y-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                        Jam Buka
-                      </span>
-                      <HourSelect
-                        value={h.openStart}
-                        onChange={(v) =>
-                          updateDay(h.day, {
-                            openStart: v,
-                            openEnd: Math.max(h.openEnd, v + 1),
-                          })
-                        }
-                        options={Array.from({ length: 24 }, (_, i) => i).filter(
-                          (i) => i < h.openEnd,
-                        )}
-                      />
-                      <span className="text-[var(--text-muted)]">–</span>
-                      <HourSelect
-                        value={h.openEnd}
-                        onChange={(v) => updateDay(h.day, { openEnd: v })}
-                        options={Array.from({ length: 24 }, (_, i) => i + 1).filter(
-                          (i) => i > h.openStart,
-                        )}
-                      />
-                    </div>
-                    <Badge size="sm" color="success" variant="light">
-                      {h.openEnd - h.openStart} jam / hari
-                    </Badge>
-                  </div>
-                ) : (
-                  <div className="flex-1">
-                    <Badge color="neutral" variant="light">
-                      Tutup
-                    </Badge>
+                {/* Salin Senin → Hari Kerja — only under the Monday row */}
+                {h.day === 1 && (
+                  <div className="mt-3 flex items-center gap-2 pl-[3.25rem]">
+                    <Button variant="outline" size="sm" onClick={copyMonToWeekdays}>
+                      Salin Senin → Hari Kerja
+                    </Button>
+                    <Tooltip
+                      content="Salin jam buka & tutup Senin ke seluruh hari kerja (Senin–Jumat)."
+                      placement="right"
+                    >
+                      <button
+                        type="button"
+                        aria-label="Info salin jam Senin"
+                        className="flex h-5 w-5 items-center justify-center rounded-full text-[var(--text-muted)] transition-colors hover:bg-[var(--color-primary-light)] hover:text-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[rgba(37,99,235,0.18)]"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </Tooltip>
                   </div>
                 )}
               </div>

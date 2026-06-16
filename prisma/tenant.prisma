@@ -1,15 +1,18 @@
 // PadelHub — TENANT (per-club) database schema
-// Holds the club's own internal users (staff/owner/coach auth) plus business
-// data: members, courts, operating hours, bookings.
+//
+// TABLE NAMING CONVENTION
+//   m_*  = MASTER / configuration tables. Set up by the club, rarely change,
+//          NOT wiped on an app reset (m_user, m_court, m_operating_hours,
+//          m_membership_plan).
+//   t_*  = TRANSACTIONAL tables. Day-to-day operational records that ARE wiped
+//          on an app reset (t_member, t_booking, t_booking_detail,
+//          t_court_maintenance). Reset with: npm run db:reset-transactional
 //
 // AUDIT CONVENTION (every model):
 //   createdAt / createdBy · updatedAt / updatedBy · deletedAt / deletedBy
 //   isDeleted (0 = live, 1 = soft-deleted). Never hard-delete: set isDeleted=1
-//   and stamp deletedAt/deletedBy instead.
-//
-// MEMBERS are deliberately a SEPARATE table from internal users (m_user). Both
-// can log in, but members are customers (CRM + member portal) while m_user are
-// internal team (owner/staff/coach/superadmin).
+//   and stamp deletedAt/deletedBy instead (soft delete). The transactional
+//   reset truncates t_* tables entirely (hard wipe) for a clean slate.
 
 generator client {
   provider = "prisma-client-js"
@@ -20,6 +23,10 @@ datasource db {
   provider = "postgresql"
   url      = env("TENANT_DATABASE_URL")
 }
+
+// ════════════════════════════════════════════════════════════
+//  MASTER / CONFIG TABLES (m_*)
+// ════════════════════════════════════════════════════════════
 
 /// An INTERNAL login subject inside a tenant (owner / staff / coach / superadmin).
 /// Role is resolved against the MASTER database via roleKey.
@@ -101,47 +108,39 @@ model m_court {
   deletedBy String?   @db.VarChar(100)
   isDeleted Int       @default(0)
 
-  bookings m_booking[]
-  maintenances m_court_maintenance[]
+  bookingDetails t_booking_detail[]
+  maintenances   t_court_maintenance[]
 
   @@index([companyId])
   @@index([status])
   @@index([isDeleted])
 }
 
-/// Club member (player CRM) AND a login subject for the member portal.
-/// Registered at the front desk / register page. Membership tier and coaching
-/// are NOT implemented yet: every new member is a plain registrant with tier
-/// "daily". Registration is FREE (no payment) — money only changes hands when
-/// the member books a court (see m_booking).
-model m_member {
-  id           String  @id @default(uuid()) @db.Uuid
-  companyId    String  @db.VarChar(50)
-  memberNo     String  @db.VarChar(40) // PHB-2026-xxxx
-  /// login username for the member portal (lowercase, unique per tenant)
-  username     String  @db.VarChar(100)
-  /// bcrypt hash; members can log in to the member portal
-  passwordHash String  @db.Text
-  name         String  @db.VarChar(255)
-  phone        String  @db.VarChar(30)
-  email        String? @db.VarChar(150)
-  /// legacy tier label (kept for display); real benefits come from planId
-  tier         String  @default("daily") @db.VarChar(20)
-  status       String  @default("active") @db.VarChar(20) // active|inactive|frozen
-  city         String? @db.VarChar(100)
-  avatar       String? @db.VarChar(255)
-  onboarded    Boolean @default(false)
-  lastLogin    DateTime? @db.Timestamp(0)
-
-  // ── membership assignment (benefits resolved from m_membership_plan) ──
-  /// assigned plan; null = no active membership (plain / walk-in)
-  planId         String?   @db.Uuid
-  /// ISO date the current quota cycle started (for reset rollover)
-  cycleStart     DateTime? @db.Timestamp(0)
-  /// court bookings consumed in the current cycle
-  quotaUsed      Int       @default(0)
-  /// free coaching sessions consumed in the current cycle
-  coachingUsed   Int       @default(0)
+/// Membership plan (benefits + court-booking quota), configured by the club.
+/// Benefits are consumed by the shared calcMembershipBenefit() helper.
+model m_membership_plan {
+  id                    String  @id @default(uuid()) @db.Uuid
+  companyId             String  @db.VarChar(50)
+  name                  String  @db.VarChar(100)
+  color                 String  @default("#6D5BFF") @db.VarChar(20)
+  /// recurring fee in IDR (0 = free)
+  priceMonthly          Int     @default(0)
+  /// one-time join fee in IDR (0 = none)
+  joinFee               Int     @default(0)
+  /// free court bookings included per cycle
+  includedCourtBookings Int     @default(0)
+  /// days before the quota cycle resets (0 = never)
+  resetPeriodDays       Int     @default(30)
+  /// free coaching sessions per cycle
+  freeCoaching          Int     @default(0)
+  /// % discount on court rate after quota is used up (0–100)
+  courtDiscountPct      Int     @default(0)
+  /// marketing bullet points
+  perks                 Json
+  active                Boolean @default(true)
+  highlighted           Boolean @default(false)
+  /// display order
+  sortOrder             Int     @default(0)
 
   // ── audit + soft delete ──
   createdAt DateTime  @default(now()) @db.Timestamp(0)
@@ -152,7 +151,60 @@ model m_member {
   deletedBy String?   @db.VarChar(100)
   isDeleted Int       @default(0)
 
-  bookings m_booking[]
+  members t_member[]
+
+  @@index([companyId])
+  @@index([active])
+  @@index([isDeleted])
+}
+
+// ════════════════════════════════════════════════════════════
+//  TRANSACTIONAL TABLES (t_*) — wiped on app reset
+// ════════════════════════════════════════════════════════════
+
+/// Club member (player CRM) AND a login subject for the member portal.
+/// Transactional: members are created by day-to-day registration and are wiped
+/// on an app reset. Members are SEPARATE from internal users (m_user); both can
+/// log in, but members are customers while m_user are internal team.
+model t_member {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @db.VarChar(50)
+  memberNo     String    @db.VarChar(40) // PHB-2026-xxxx
+  /// login username for the member portal (lowercase, unique per tenant)
+  username     String    @db.VarChar(100)
+  /// bcrypt hash; members can log in to the member portal
+  passwordHash String    @db.Text
+  name         String    @db.VarChar(255)
+  phone        String    @db.VarChar(30)
+  email        String?   @db.VarChar(150)
+  /// legacy tier label (kept for display); real benefits come from planId
+  tier         String    @default("daily") @db.VarChar(20)
+  status       String    @default("active") @db.VarChar(20) // active|inactive|frozen
+  city         String?   @db.VarChar(100)
+  avatar       String?   @db.VarChar(255)
+  onboarded    Boolean   @default(false)
+  lastLogin    DateTime? @db.Timestamp(0)
+
+  // ── membership assignment (benefits resolved from m_membership_plan) ──
+  /// assigned plan; null = no active membership (plain / walk-in)
+  planId       String?   @db.Uuid
+  /// ISO date the current quota cycle started (for reset rollover)
+  cycleStart   DateTime? @db.Timestamp(0)
+  /// court bookings consumed in the current cycle
+  quotaUsed    Int       @default(0)
+  /// free coaching sessions consumed in the current cycle
+  coachingUsed Int       @default(0)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  bookings t_booking[]
   plan     m_membership_plan? @relation(fields: [planId], references: [id])
 
   @@unique([companyId, memberNo])
@@ -164,31 +216,22 @@ model m_member {
   @@index([isDeleted])
 }
 
-/// Membership plan (benefits + court-booking quota), configured by the club.
-/// Benefits are consumed by the shared calcMembershipBenefit() helper.
-model m_membership_plan {
-  id                   String  @id @default(uuid()) @db.Uuid
-  companyId            String  @db.VarChar(50)
-  name                 String  @db.VarChar(100)
-  color                String  @default("#6D5BFF") @db.VarChar(20)
-  /// recurring fee in IDR (0 = free)
-  priceMonthly         Int     @default(0)
-  /// one-time join fee in IDR (0 = none)
-  joinFee              Int     @default(0)
-  /// free court bookings included per cycle
-  includedCourtBookings Int    @default(0)
-  /// days before the quota cycle resets (0 = never)
-  resetPeriodDays      Int     @default(30)
-  /// free coaching sessions per cycle
-  freeCoaching         Int     @default(0)
-  /// % discount on court rate after quota is used up (0–100)
-  courtDiscountPct     Int     @default(0)
-  /// marketing bullet points
-  perks                Json
-  active               Boolean @default(true)
-  highlighted          Boolean @default(false)
-  /// display order
-  sortOrder            Int     @default(0)
+/// A booking TRANSACTION header. One per checkout — groups one or more court
+/// sessions (t_booking_detail) paid together. Payment + totals live here.
+model t_booking {
+  id            String  @id @default(uuid()) @db.Uuid
+  companyId     String  @db.VarChar(50)
+  memberId      String? @db.Uuid // null for walk-in / unregistered
+  type          String  @default("member") @db.VarChar(20) // member|walk_in|coaching|event
+  status        String  @default("confirmed") @db.VarChar(20) // confirmed|pending|checked_in|completed|cancelled
+  customer      String  @db.VarChar(255) // display label
+  /// payment method used at checkout (Cash|Card|QRIS|Wallet)
+  paymentMethod String? @db.VarChar(20)
+  /// sum of all detail line prices actually charged (IDR)
+  totalPrice    Int     @default(0)
+  /// membership quota slots consumed by this transaction
+  quotaConsumed Int     @default(0)
+  note          String? @db.Text
 
   // ── audit + soft delete ──
   createdAt DateTime  @default(now()) @db.Timestamp(0)
@@ -199,27 +242,33 @@ model m_membership_plan {
   deletedBy String?   @db.VarChar(100)
   isDeleted Int       @default(0)
 
-  members m_member[]
+  member  t_member?          @relation(fields: [memberId], references: [id])
+  details t_booking_detail[]
 
   @@index([companyId])
-  @@index([active])
+  @@index([memberId])
+  @@index([status])
   @@index([isDeleted])
 }
 
-/// A court booking. Created from the New Booking flow or member registration.
-/// Payment lives here: `price` is the charged IDR total.
-model m_booking {
+/// A single court session line within a booking transaction. Each line is one
+/// court at one time window; the calendar / availability read these directly.
+model t_booking_detail {
   id        String   @id @default(uuid()) @db.Uuid
   companyId String   @db.VarChar(50)
+  bookingId String   @db.Uuid // FK → t_booking header
   courtId   String   @db.Uuid
-  memberId  String?  @db.Uuid // null for walk-in / unregistered
-  type      String   @default("member") @db.VarChar(20) // member|walk_in|coaching|event
-  status    String   @default("confirmed") @db.VarChar(20) // confirmed|pending|checked_in|completed|cancelled
-  customer  String   @db.VarChar(255) // display label
   start     DateTime @db.Timestamp(0)
   end       DateTime @db.Timestamp(0)
   partySize Int      @default(4)
-  price     Int      @default(0) // IDR total charged for this slot
+  /// court rate before membership benefit (IDR)
+  basePrice Int      @default(0)
+  /// amount actually charged for this line after benefit (IDR)
+  price     Int      @default(0)
+  /// regular|peak|free (quota)|discount — informational
+  rateNote  String?  @db.VarChar(40)
+  /// confirmed|cancelled|checked_in|completed (mirrors header but per-line)
+  status    String   @default("confirmed") @db.VarChar(20)
   note      String?  @db.Text
 
   // ── audit + soft delete ──
@@ -231,21 +280,20 @@ model m_booking {
   deletedBy String?   @db.VarChar(100)
   isDeleted Int       @default(0)
 
-  court  m_court   @relation(fields: [courtId], references: [id])
-  member m_member? @relation(fields: [memberId], references: [id])
+  booking t_booking @relation(fields: [bookingId], references: [id])
+  court   m_court   @relation(fields: [courtId], references: [id])
 
   @@index([companyId])
+  @@index([bookingId])
   @@index([courtId])
-  @@index([memberId])
   @@index([status])
   @@index([start])
   @@index([isDeleted])
 }
 
 /// Court maintenance / day-off windows. A court is unavailable for booking
-/// during [start, end). Used to mark holidays, repairs, or one-off closures —
-/// separate from the recurring weekly schedule on m_court.
-model m_court_maintenance {
+/// during [start, end). Operational records — wiped on an app reset.
+model t_court_maintenance {
   id        String   @id @default(uuid()) @db.Uuid
   companyId String   @db.VarChar(50)
   courtId   String   @db.Uuid

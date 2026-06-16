@@ -293,11 +293,11 @@ async function seedTenant() {
     phone: "+62 813 1000 2001",
     email: "andi@email.com",
   };
-  const existingMember = await tenant.m_member.findFirst({
+  const existingMember = await tenant.t_member.findFirst({
     where: { companyId: COMPANY_ID, username: sampleMember.username },
   });
   if (!existingMember) {
-    await tenant.m_member.create({
+    await tenant.t_member.create({
       data: {
         companyId: COMPANY_ID,
         memberNo: sampleMember.memberNo,

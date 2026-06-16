@@ -86,7 +86,7 @@ export async function getMemberOptionsAction(): Promise<
   const session = await requireSession();
   if (!session) return [];
   const db = await getTenantDb();
-  const rows = await db.m_member.findMany({
+  const rows = await db.t_member.findMany({
     where: { companyId: session.companyId, isDeleted: 0 },
     orderBy: { createdAt: "desc" },
     select: { id: true, name: true, phone: true, tier: true },
@@ -105,7 +105,7 @@ export async function getMembersAction(): Promise<MemberRecord[]> {
   if (!session) return [];
 
   const db = await getTenantDb();
-  const rows = await db.m_member.findMany({
+  const rows = await db.t_member.findMany({
     where: { companyId: session.companyId, isDeleted: 0 },
     orderBy: { createdAt: "desc" },
     include: { plan: { select: { id: true, name: true, color: true } } },
@@ -152,7 +152,7 @@ export async function assignMemberPlanAction(
     tier = plan.name.toLowerCase();
   }
 
-  await db.m_member.updateMany({
+  await db.t_member.updateMany({
     where: { id: memberId, companyId: session.companyId, ...NOT_DELETED },
     data: {
       planId,
@@ -183,7 +183,7 @@ export async function updateMemberAction(
   const session = await requireSession();
   if (!session) return { success: false, error: "Not authenticated." };
   const db = await getTenantDb();
-  await db.m_member.updateMany({
+  await db.t_member.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: {
       ...(patch.name !== undefined && { name: patch.name.trim() }),
@@ -205,7 +205,7 @@ export async function deleteMemberAction(
   const session = await requireSession();
   if (!session) return { success: false };
   const db = await getTenantDb();
-  await db.m_member.updateMany({
+  await db.t_member.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: auditSoftDelete(session.userId),
   });
@@ -222,7 +222,7 @@ export async function checkMemberUsernameAction(
   const u = username.trim().toLowerCase();
   if (u.length < 3) return { available: false };
   const db = await getTenantDb();
-  const existing = await db.m_member.findFirst({
+  const existing = await db.t_member.findFirst({
     where: { companyId: session.companyId, username: u },
   });
   return { available: !existing };
@@ -258,7 +258,7 @@ export async function registerMemberAction(
     const db = await getTenantDb();
 
     // username must be unique within the tenant
-    const clash = await db.m_member.findFirst({
+    const clash = await db.t_member.findFirst({
       where: { companyId: session.companyId, username },
     });
     if (clash) {
@@ -268,7 +268,7 @@ export async function registerMemberAction(
     const memberNo = genMemberNo();
     const passwordHash = await bcrypt.hash(input.password, 10);
 
-    const member = await db.m_member.create({
+    const member = await db.t_member.create({
       data: {
         companyId: session.companyId,
         memberNo,
@@ -285,23 +285,35 @@ export async function registerMemberAction(
       },
     });
 
-    // Court bookings (the only thing paid for at registration).
+    // Court bookings (the only thing paid for at registration) → one
+    // transaction header + a detail line per session.
     if (input.bookings && input.bookings.length > 0) {
-      await db.m_booking.createMany({
-        data: input.bookings.map((b) => ({
+      const first = input.bookings[0];
+      const totalPrice = input.bookings.reduce((s, b) => s + b.price, 0);
+      await db.t_booking.create({
+        data: {
           companyId: session.companyId,
-          courtId: b.courtId,
           memberId: member.id,
-          type: b.type,
-          status: b.status,
-          customer: b.customer,
-          start: new Date(b.start),
-          end: new Date(b.end),
-          partySize: b.partySize,
-          price: b.price,
-          note: b.note ?? null,
-          createdBy: b.createdBy || session.userId,
-        })),
+          type: first.type,
+          status: first.status,
+          customer: first.customer,
+          totalPrice,
+          ...auditCreate(session.userId),
+          details: {
+            create: input.bookings.map((b) => ({
+              companyId: session.companyId,
+              courtId: b.courtId,
+              start: new Date(b.start),
+              end: new Date(b.end),
+              partySize: b.partySize,
+              basePrice: b.price,
+              price: b.price,
+              status: b.status,
+              note: b.note ?? null,
+              ...auditCreate(b.createdBy || session.userId),
+            })),
+          },
+        },
       });
     }
 
