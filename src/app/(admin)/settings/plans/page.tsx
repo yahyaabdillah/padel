@@ -2,54 +2,83 @@
 
 // Master ▸ Membership Plan — CRUD for membership plans (benefits + court-booking
 // quota). Owner-configurable. Persisted via MembershipContext (localStorage).
+// Benefits set here are consumed by the shared calcMembershipBenefit() helper
+// across booking / registration / payment.
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Check,
+  Pencil,
+  Trash2,
+  Plus,
+  Star,
+  Ticket,
+  Percent,
+  CalendarClock,
+  GraduationCap,
+} from "lucide-react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
 import Card from "@/components/ui/card/Card";
 import Badge from "@/components/ui/badge/Badge";
 import Button from "@/components/ui/button/Button";
 import Switch from "@/components/ui/switch/Switch";
 import TextInput from "@/components/ui/input/TextInput";
+import CurrencyInput from "@/components/ui/input/CurrencyInput";
+import Textarea from "@/components/ui/input/Textarea";
+import InputLabel from "@/components/ui/input/InputLabel";
 import { ModalDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
-import { useMembership } from "@/context/MembershipContext";
 import { formatIDR } from "@/components/club-core/format";
-import type { MembershipPlan } from "@/data/padel/club/membershipPlans";
+import {
+  getPlansAction,
+  createPlanAction,
+  updatePlanAction,
+  deletePlanAction,
+  type PlanRecord,
+} from "@/app/(admin)/settings/plans/actions";
 
-type Draft = Omit<MembershipPlan, "perks"> & { perksText: string };
+type Draft = Omit<PlanRecord, "id" | "perks"> & { id?: string; perksText: string };
 
-const toDraft = (p: MembershipPlan): Draft => ({
-  ...p,
-  perksText: p.perks.join("\n"),
-});
+const PALETTE = ["#6D5BFF", "#14B8A6", "#F59E0B", "#EC4899", "#0EA5E9", "#94A3B8"];
 
-const fromDraft = (d: Draft): MembershipPlan => {
-  const { perksText, ...rest } = d;
-  return {
-    ...rest,
-    perks: perksText
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean),
-  };
-};
+const toDraft = (p: PlanRecord): Draft => ({ ...p, perksText: p.perks.join("\n") });
+
+const perksFromText = (t: string): string[] =>
+  t.split("\n").map((s) => s.trim()).filter(Boolean);
 
 export default function MembershipPlansPage() {
   const toast = useToast();
-  const { plans, updatePlan, addPlan, deletePlan, resetPlans } = useMembership();
+  const [plans, setPlans] = useState<PlanRecord[]>([]);
+  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Draft | null>(null);
   const [isNew, setIsNew] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<PlanRecord | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const openEdit = (p: MembershipPlan) => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setPlans(await getPlansAction());
+    } catch {
+      toast.error("Gagal memuat plan.");
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const openEdit = (p: PlanRecord) => {
     setEditing(toDraft(p));
     setIsNew(false);
   };
 
   const openNew = () => {
     setEditing({
-      id: `plan-${Date.now().toString(36)}` as MembershipPlan["id"],
       name: "",
-      color: "#6D5BFF",
+      color: PALETTE[0],
       priceMonthly: 0,
       joinFee: 0,
       includedCourtBookings: 0,
@@ -57,129 +86,210 @@ export default function MembershipPlansPage() {
       freeCoaching: 0,
       courtDiscountPct: 0,
       active: true,
+      highlighted: false,
+      sortOrder: plans.length,
       perksText: "",
     });
     setIsNew(true);
   };
 
-  const save = () => {
-    if (!editing) return;
+  const save = async () => {
+    if (!editing || saving) return;
     if (editing.name.trim().length < 2) {
       toast.error("Nama plan minimal 2 karakter.", "Form belum lengkap");
       return;
     }
-    const plan = fromDraft(editing);
-    if (isNew) {
-      addPlan(plan);
-      toast.success(`Plan ${plan.name} ditambahkan.`, "Tersimpan");
-    } else {
-      updatePlan(plan.id, plan);
-      toast.success(`Plan ${plan.name} diperbarui.`, "Tersimpan");
+    setSaving(true);
+    const { perksText, id, ...rest } = editing;
+    const input = { ...rest, perks: perksFromText(perksText) };
+    const res = isNew
+      ? await createPlanAction(input)
+      : await updatePlanAction(id!, input);
+    setSaving(false);
+    if (!("success" in res) || !res.success) {
+      toast.error("Gagal menyimpan plan.");
+      return;
     }
+    toast.success(`Plan ${editing.name} ${isNew ? "ditambahkan" : "diperbarui"}.`, "Tersimpan");
     setEditing(null);
+    void load();
   };
 
-  const remove = (p: MembershipPlan) => {
-    deletePlan(p.id);
-    toast.success(`Plan ${p.name} dihapus.`, "Terhapus");
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    const res = await deletePlanAction(confirmDelete.id);
+    setConfirmDelete(null);
+    if (!res.success) {
+      toast.error("Gagal menghapus plan.");
+      return;
+    }
+    toast.info(`Plan ${confirmDelete.name} dihapus.`, "Terhapus");
+    void load();
   };
 
-  const num = (v: string) => Math.max(0, Number(v.replace(/\D/g, "")) || 0);
+  const stats = useMemo(() => {
+    const active = plans.filter((p) => p.active).length;
+    const paid = plans.filter((p) => p.priceMonthly > 0).length;
+    return { total: plans.length, active, paid };
+  }, [plans]);
 
   return (
     <PageScaffold
       title="Membership Plan"
-      subtitle="Atur benefit tiap plan: harga, kuota booking lapangan gratis, periode reset, dan jatah coaching."
+      subtitle="Atur benefit tiap plan: harga, kuota booking gratis, diskon, dan jatah coaching. Benefit langsung dipakai saat booking & registrasi member."
       requireAny={["settings.view"]}
       actions={
-        <>
-          <Button variant="outline" onClick={() => { resetPlans(); toast.info("Plan dikembalikan ke default."); }}>
-            Reset default
-          </Button>
-          <Button variant="primary" sheen onClick={openNew}>
-            + Tambah Plan
-          </Button>
-        </>
+        <Button variant="primary" sheen glow startIcon={<Plus className="h-4 w-4" />} onClick={openNew}>
+          Tambah Plan
+        </Button>
       }
     >
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {plans.map((p) => (
-          <Card key={p.id} padding="md" className="flex flex-col">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="h-3 w-3 rounded-full" style={{ background: p.color }} />
-                <h5 className="text-base font-bold text-[var(--text-heading)]">{p.name}</h5>
+      {/* summary chips */}
+      <div className="mb-6 flex flex-wrap gap-2">
+        <span className="rounded-lg bg-[var(--surface-muted)] px-3 py-1.5 text-xs font-medium text-[var(--text-caption)]">
+          {stats.total} plan
+        </span>
+        <span className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+          {stats.active} aktif
+        </span>
+        <span className="rounded-lg bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+          {stats.paid} berbayar
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+        {loading
+          ? Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-[300px] animate-pulse rounded-2xl bg-[var(--surface-muted)]" />
+            ))
+          : plans.map((p) => (
+          <Card
+            key={p.id}
+            variant="accent-top"
+            accentColor={p.color}
+            padding="none"
+            className={[
+              "flex flex-col",
+              p.highlighted ? "ring-1 ring-[var(--color-primary)]/40" : "",
+            ].join(" ")}
+          >
+            <div className="p-5">
+              {/* header */}
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="flex h-9 w-9 items-center justify-center rounded-xl text-white"
+                    style={{ background: p.color }}
+                  >
+                    <Star className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <h5 className="text-base font-bold leading-tight text-[var(--text-heading)]">
+                      {p.name || "Tanpa nama"}
+                    </h5>
+                    <Badge size="sm" color={p.active ? "success" : "neutral"} variant="light">
+                      {p.active ? "Aktif" : "Nonaktif"}
+                    </Badge>
+                  </div>
+                </div>
+                {p.highlighted && (
+                  <Badge size="sm" color="primary" variant="solid">
+                    Popular
+                  </Badge>
+                )}
               </div>
-              {p.highlighted && (
-                <Badge size="sm" color="primary" variant="light">Popular</Badge>
+
+              {/* price */}
+              <div className="mt-4">
+                <span className="text-2xl font-extrabold text-[var(--text-heading)]">
+                  {p.priceMonthly === 0 ? "Gratis" : formatIDR(p.priceMonthly)}
+                </span>
+                {p.priceMonthly > 0 && (
+                  <span className="text-sm text-[var(--text-muted)]"> /bulan</span>
+                )}
+                {p.joinFee > 0 && (
+                  <p className="mt-0.5 text-xs text-[var(--text-caption)]">
+                    + join fee {formatIDR(p.joinFee)}
+                  </p>
+                )}
+              </div>
+
+              {/* benefit highlights */}
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <BenefitChip
+                  icon={<Ticket className="h-3.5 w-3.5" />}
+                  label="Kuota gratis"
+                  value={
+                    p.includedCourtBookings > 0
+                      ? `${p.includedCourtBookings}x`
+                      : "—"
+                  }
+                />
+                <BenefitChip
+                  icon={<Percent className="h-3.5 w-3.5" />}
+                  label="Diskon"
+                  value={p.courtDiscountPct > 0 ? `${p.courtDiscountPct}%` : "—"}
+                />
+                <BenefitChip
+                  icon={<GraduationCap className="h-3.5 w-3.5" />}
+                  label="Coaching"
+                  value={p.freeCoaching > 0 ? `${p.freeCoaching}x` : "—"}
+                />
+                <BenefitChip
+                  icon={<CalendarClock className="h-3.5 w-3.5" />}
+                  label="Reset"
+                  value={p.resetPeriodDays > 0 ? `${p.resetPeriodDays} hr` : "—"}
+                />
+              </div>
+
+              {/* perks */}
+              {p.perks.length > 0 && (
+                <ul className="mt-4 space-y-1.5">
+                  {p.perks.slice(0, 4).map((perk, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-[var(--text-body)]">
+                      <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                      <span>{perk}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 
-            <p className="mt-2">
-              <span className="text-xl font-bold text-[var(--text-heading)]">
-                {p.priceMonthly === 0 ? "Gratis" : formatIDR(p.priceMonthly)}
-              </span>
-              {p.priceMonthly > 0 && (
-                <span className="text-xs text-[var(--text-muted)]">/bulan</span>
-              )}
-            </p>
-
-            <dl className="mt-3 space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <dt className="text-[var(--text-caption)]">Join fee</dt>
-                <dd className="font-medium text-[var(--text-body)]">
-                  {p.joinFee === 0 ? "—" : formatIDR(p.joinFee)}
-                </dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-[var(--text-caption)]">Kuota lapangan</dt>
-                <dd className="font-medium text-[var(--text-body)]">
-                  {p.includedCourtBookings > 0 ? `${p.includedCourtBookings}x / siklus` : "—"}
-                </dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-[var(--text-caption)]">Reset tiap</dt>
-                <dd className="font-medium text-[var(--text-body)]">
-                  {p.resetPeriodDays > 0 ? `${p.resetPeriodDays} hari` : "—"}
-                </dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-[var(--text-caption)]">Coaching gratis</dt>
-                <dd className="font-medium text-[var(--text-body)]">
-                  {p.freeCoaching > 0 ? `${p.freeCoaching}x / siklus` : "—"}
-                </dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-[var(--text-caption)]">Diskon booking</dt>
-                <dd className="font-medium text-[var(--text-body)]">
-                  {p.courtDiscountPct > 0 ? `${p.courtDiscountPct}%` : "—"}
-                </dd>
-              </div>
-            </dl>
-
-            <div className="mt-3">
-              <Badge size="sm" color={p.active ? "success" : "neutral"} variant="light">
-                {p.active ? "Aktif" : "Nonaktif"}
-              </Badge>
-            </div>
-
-            <div className="mt-4 flex gap-2 border-t border-[var(--border-light)] pt-3">
-              <Button size="sm" variant="outline" fullWidth onClick={() => openEdit(p)}>
+            {/* actions */}
+            <div className="mt-auto flex gap-2 border-t border-[var(--border-light)] p-4">
+              <Button
+                size="sm"
+                variant="outline"
+                fullWidth
+                startIcon={<Pencil className="h-3.5 w-3.5" />}
+                onClick={() => openEdit(p)}
+              >
                 Edit
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => remove(p)}
+                className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
+                onClick={() => setConfirmDelete(p)}
                 aria-label={`Hapus ${p.name}`}
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-7 0v12a1 1 0 001 1h6a1 1 0 001-1V7" />
-                </svg>
+                <Trash2 className="h-4 w-4" />
               </Button>
             </div>
           </Card>
         ))}
+
+        {/* add tile */}
+        {!loading && (
+        <button
+          type="button"
+          onClick={openNew}
+          className="flex min-h-[260px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[var(--border-strong)] text-[var(--text-caption)] transition-colors hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-light)] hover:text-[var(--color-primary)]"
+        >
+          <Plus className="h-7 w-7" />
+          <span className="text-sm font-medium">Tambah Plan Baru</span>
+        </button>
+        )}
       </div>
 
       {/* Edit / create modal */}
@@ -191,108 +301,196 @@ export default function MembershipPlansPage() {
         size="lg"
         footer={
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setEditing(null)}>Batal</Button>
-            <Button variant="primary" sheen onClick={save}>Simpan</Button>
+            <Button variant="outline" onClick={() => setEditing(null)}>
+              Batal
+            </Button>
+            <Button variant="primary" sheen onClick={save}>
+              Simpan
+            </Button>
           </div>
         }
       >
         {editing && (
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-            <TextInput
-              label="Nama plan"
-              labelInfo="Nama plan yang tampil di kartu membership & pilihan tier."
-              value={editing.name}
-              onChange={(v) => setEditing({ ...editing, name: v })}
-              placeholder="cth. Pro"
-              required
-            />
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-[var(--text-body)]">
-                Warna aksen
-              </label>
-              <input
-                type="color"
-                value={editing.color}
-                onChange={(e) => setEditing({ ...editing, color: e.target.value })}
-                className="h-11 w-full cursor-pointer rounded-lg border border-[var(--border-default)] bg-transparent"
-              />
-            </div>
+          <div className="space-y-6">
+            {/* Identitas */}
+            <section>
+              <h4 className="mb-3 text-sm font-semibold text-[var(--text-heading)]">
+                Identitas
+              </h4>
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <TextInput
+                  label="Nama plan"
+                  labelInfo="Nama plan yang tampil di kartu membership & pilihan tier."
+                  value={editing.name}
+                  onChange={(v) => setEditing({ ...editing, name: v })}
+                  placeholder="cth. Pro"
+                  required
+                />
+                <div>
+                  <InputLabel label="Warna aksen" tooltip="Warna kartu & badge plan." />
+                  <div className="flex h-11 items-center gap-2">
+                    {PALETTE.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setEditing({ ...editing, color: c })}
+                        className={[
+                          "h-7 w-7 rounded-full transition-transform",
+                          editing.color === c
+                            ? "ring-2 ring-offset-2 ring-[var(--color-primary)] ring-offset-[var(--surface-card)]"
+                            : "hover:scale-110",
+                        ].join(" ")}
+                        style={{ background: c }}
+                        aria-label={`Warna ${c}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
 
-            <TextInput
-              label="Harga / bulan (IDR)"
-              labelInfo="Biaya keanggotaan berulang. Isi 0 untuk plan gratis."
-              value={String(editing.priceMonthly)}
-              onChange={(v) => setEditing({ ...editing, priceMonthly: num(v) })}
-              startIcon={<span className="text-xs">Rp</span>}
-            />
-            <TextInput
-              label="Join fee (IDR)"
-              labelInfo="Biaya pendaftaran sekali bayar saat member bergabung."
-              value={String(editing.joinFee)}
-              onChange={(v) => setEditing({ ...editing, joinFee: num(v) })}
-              startIcon={<span className="text-xs">Rp</span>}
-            />
+            {/* Harga */}
+            <section className="border-t border-[var(--border-default)] pt-5">
+              <h4 className="mb-3 text-sm font-semibold text-[var(--text-heading)]">
+                Harga
+              </h4>
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <CurrencyInput
+                  label="Harga / bulan"
+                  labelInfo="Biaya keanggotaan berulang. Kosongkan / 0 untuk plan gratis."
+                  value={editing.priceMonthly}
+                  onChange={(v) => setEditing({ ...editing, priceMonthly: v })}
+                />
+                <CurrencyInput
+                  label="Join fee"
+                  labelInfo="Biaya pendaftaran sekali bayar saat member bergabung."
+                  value={editing.joinFee}
+                  onChange={(v) => setEditing({ ...editing, joinFee: v })}
+                />
+              </div>
+            </section>
 
-            <TextInput
-              label="Kuota booking lapangan"
-              labelInfo="Jumlah booking lapangan GRATIS per siklus. Berlaku untuk semua lapangan & jam (termasuk peak). Isi 0 jika tidak ada."
-              value={String(editing.includedCourtBookings)}
-              onChange={(v) => setEditing({ ...editing, includedCourtBookings: num(v) })}
-            />
-            <TextInput
-              label="Reset kuota tiap (hari)"
-              labelInfo="Periode siklus kuota. cth. 30 = kuota di-reset tiap 30 hari. Isi 0 jika kuota tidak pernah reset."
-              value={String(editing.resetPeriodDays)}
-              onChange={(v) => setEditing({ ...editing, resetPeriodDays: num(v) })}
-            />
+            {/* Benefit */}
+            <section className="border-t border-[var(--border-default)] pt-5">
+              <h4 className="mb-3 text-sm font-semibold text-[var(--text-heading)]">
+                Benefit & Kuota
+              </h4>
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <TextInput
+                  label="Kuota booking lapangan"
+                  labelInfo="Jumlah booking lapangan GRATIS per siklus. Berlaku untuk semua lapangan & jam (peak termasuk)."
+                  type="number"
+                  value={String(editing.includedCourtBookings)}
+                  onChange={(v) =>
+                    setEditing({ ...editing, includedCourtBookings: Math.max(0, Number(v) || 0) })
+                  }
+                  hint="0 = tanpa kuota gratis"
+                />
+                <TextInput
+                  label="Reset kuota tiap (hari)"
+                  labelInfo="Periode siklus kuota. cth. 30 = reset tiap 30 hari. 0 = tidak pernah reset."
+                  type="number"
+                  value={String(editing.resetPeriodDays)}
+                  onChange={(v) =>
+                    setEditing({ ...editing, resetPeriodDays: Math.max(0, Number(v) || 0) })
+                  }
+                />
+                <TextInput
+                  label="Coaching gratis / siklus"
+                  labelInfo="Jumlah sesi coaching yang coach fee-nya digratiskan per siklus."
+                  type="number"
+                  value={String(editing.freeCoaching)}
+                  onChange={(v) =>
+                    setEditing({ ...editing, freeCoaching: Math.max(0, Number(v) || 0) })
+                  }
+                />
+                <TextInput
+                  label="Diskon booking setelah kuota (%)"
+                  labelInfo="Diskon tarif lapangan untuk booking SETELAH kuota gratis habis."
+                  type="number"
+                  value={String(editing.courtDiscountPct)}
+                  onChange={(v) =>
+                    setEditing({
+                      ...editing,
+                      courtDiscountPct: Math.min(100, Math.max(0, Number(v) || 0)),
+                    })
+                  }
+                  hint="0–100%"
+                />
+              </div>
+            </section>
 
-            <TextInput
-              label="Coaching gratis / siklus"
-              labelInfo="Jumlah sesi coaching yang coach fee-nya digratiskan per siklus."
-              value={String(editing.freeCoaching)}
-              onChange={(v) => setEditing({ ...editing, freeCoaching: num(v) })}
-            />
-            <TextInput
-              label="Diskon booking setelah kuota (%)"
-              labelInfo="Diskon tarif lapangan untuk booking SETELAH kuota gratis habis."
-              value={String(editing.courtDiscountPct)}
-              onChange={(v) =>
-                setEditing({ ...editing, courtDiscountPct: Math.min(100, num(v)) })
-              }
-            />
-
-            <div className="sm:col-span-2">
-              <label className="mb-1.5 block text-sm font-medium text-[var(--text-body)]">
-                Benefit (satu per baris)
-              </label>
-              <textarea
+            {/* Perks + flags */}
+            <section className="border-t border-[var(--border-default)] pt-5">
+              <Textarea
+                label="Benefit (satu per baris)"
                 value={editing.perksText}
-                onChange={(e) => setEditing({ ...editing, perksText: e.target.value })}
+                onChange={(v) => setEditing({ ...editing, perksText: v })}
                 rows={4}
                 placeholder={"4x booking lapangan gratis / siklus\n15% off setelah kuota habis"}
-                className="w-full rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-2.5 text-sm text-[var(--text-heading)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-3 focus:ring-[rgba(37,99,235,0.12)]"
               />
-            </div>
-
-            <div className="flex items-center justify-between gap-3 sm:col-span-2">
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={editing.active}
-                  onChange={(v) => setEditing({ ...editing, active: v })}
-                />
-                <span className="text-sm text-[var(--text-body)]">Plan aktif (bisa dipilih)</span>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+                <label className="flex items-center gap-3">
+                  <Switch
+                    checked={editing.active}
+                    onChange={(v) => setEditing({ ...editing, active: v })}
+                  />
+                  <span className="text-sm text-[var(--text-body)]">Plan aktif (bisa dipilih)</span>
+                </label>
+                <label className="flex items-center gap-3">
+                  <Switch
+                    checked={!!editing.highlighted}
+                    onChange={(v) => setEditing({ ...editing, highlighted: v })}
+                  />
+                  <span className="text-sm text-[var(--text-body)]">Tandai &quot;Popular&quot;</span>
+                </label>
               </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={!!editing.highlighted}
-                  onChange={(v) => setEditing({ ...editing, highlighted: v })}
-                />
-                <span className="text-sm text-[var(--text-body)]">Tandai &quot;Popular&quot;</span>
-              </div>
-            </div>
+            </section>
           </div>
         )}
+      </ModalDialog>
+
+      {/* Delete confirm */}
+      <ModalDialog
+        isOpen={confirmDelete != null}
+        onClose={() => setConfirmDelete(null)}
+        title="Hapus plan?"
+        description={confirmDelete ? `Plan "${confirmDelete.name}" akan dihapus.` : undefined}
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
+              Batal
+            </Button>
+            <Button
+              variant="primary"
+              className="!bg-rose-500 hover:!bg-rose-600"
+              onClick={doDelete}
+            >
+              Hapus
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-[var(--text-caption)]">
+          Member yang sudah memakai plan ini tidak otomatis berubah. Pastikan
+          tidak ada member aktif pada plan ini sebelum menghapus.
+        </p>
       </ModalDialog>
     </PageScaffold>
   );
 }
+
+const BenefitChip: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}> = ({ icon, label, value }) => (
+  <div className="rounded-xl bg-[var(--surface-muted)] px-3 py-2">
+    <div className="flex items-center gap-1.5 text-[var(--text-muted)]">
+      {icon}
+      <span className="text-[10px] uppercase tracking-wide">{label}</span>
+    </div>
+    <p className="mt-0.5 text-sm font-bold text-[var(--text-heading)]">{value}</p>
+  </div>
+);

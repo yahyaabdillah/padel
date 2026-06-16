@@ -310,6 +310,57 @@ async function seedTenant() {
       },
     });
   }
+
+  console.log("→ Seeding tenant: membership plans");
+  const samplePlans = [
+    {
+      name: "Pro",
+      color: "#6D5BFF",
+      priceMonthly: 450_000,
+      joinFee: 450_000,
+      includedCourtBookings: 4,
+      resetPeriodDays: 30,
+      freeCoaching: 2,
+      courtDiscountPct: 15,
+      perks: [
+        "4x booking lapangan gratis / siklus",
+        "2x coaching gratis / siklus",
+        "15% off booking setelah kuota habis",
+      ],
+      active: true,
+      highlighted: true,
+      sortOrder: 0,
+    },
+    {
+      name: "Elite",
+      color: "#14B8A6",
+      priceMonthly: 850_000,
+      joinFee: 850_000,
+      includedCourtBookings: 8,
+      resetPeriodDays: 30,
+      freeCoaching: 8,
+      courtDiscountPct: 30,
+      perks: [
+        "8x booking lapangan gratis / siklus",
+        "8x coaching gratis / siklus",
+        "30% off booking setelah kuota habis",
+        "Locker pribadi",
+      ],
+      active: true,
+      highlighted: false,
+      sortOrder: 1,
+    },
+  ];
+  for (const p of samplePlans) {
+    const exists = await tenant.m_membership_plan.findFirst({
+      where: { companyId: COMPANY_ID, name: p.name, isDeleted: 0 },
+    });
+    if (!exists) {
+      await tenant.m_membership_plan.create({
+        data: { companyId: COMPANY_ID, ...p, perks: p.perks as object, createdBy: "seed" },
+      });
+    }
+  }
 }
 
 async function main() {

@@ -37,9 +37,11 @@ export type CreateBookingsResult = {
   ids?: string[];
 };
 
-/** Persist one or more bookings for the current tenant. */
+/** Persist one or more bookings for the current tenant. Optionally burn N
+ * membership-quota slots for a member (when bookings were covered free). */
 export async function createBookingsAction(
   bookings: CreateBookingInput[],
+  opts?: { memberId?: string; quotaConsumed?: number },
 ): Promise<CreateBookingsResult> {
   try {
     const session = await requireSession();
@@ -68,6 +70,17 @@ export async function createBookingsAction(
       ids.push(created.id);
     }
 
+    // burn membership quota if this booking consumed it
+    if (opts?.memberId && opts.quotaConsumed && opts.quotaConsumed > 0) {
+      await db.m_member.updateMany({
+        where: { id: opts.memberId, companyId: session.companyId, ...NOT_DELETED },
+        data: {
+          quotaUsed: { increment: opts.quotaConsumed },
+          ...auditUpdate(session.userId),
+        },
+      });
+    }
+
     revalidatePath("/bookings");
     return { success: true, ids };
   } catch (err) {
@@ -76,9 +89,23 @@ export async function createBookingsAction(
   }
 }
 
-export type BookingMember = { id: string; name: string; phone: string; tier: string };
+export type BookingMember = {
+  id: string;
+  name: string;
+  phone: string;
+  tier: string;
+  /** assigned plan benefit (null = no membership) */
+  plan: {
+    id: string;
+    name: string;
+    includedCourtBookings: number;
+    courtDiscountPct: number;
+  } | null;
+  /** free quota still available this cycle */
+  quotaRemaining: number;
+};
 
-/** Resolve a single member (for the payment summary). */
+/** Resolve a single member + their live membership benefit (for payment). */
 export async function getMemberByIdAction(
   id: string,
 ): Promise<BookingMember | null> {
@@ -87,9 +114,38 @@ export async function getMemberByIdAction(
   const db = await getTenantDb();
   const m = await db.m_member.findFirst({
     where: { id, companyId: session.companyId, isDeleted: 0 },
-    select: { id: true, name: true, phone: true, tier: true },
+    include: { plan: true },
   });
-  return m ? { id: m.id, name: m.name, phone: m.phone, tier: m.tier } : null;
+  if (!m) return null;
+
+  let plan: BookingMember["plan"] = null;
+  let quotaRemaining = 0;
+  if (m.plan && m.plan.isDeleted === 0) {
+    // roll the cycle if it has elapsed
+    let used = m.quotaUsed;
+    if (m.plan.resetPeriodDays > 0 && m.cycleStart) {
+      const elapsedDays = Math.floor(
+        (Date.now() - m.cycleStart.getTime()) / 86_400_000,
+      );
+      if (elapsedDays >= m.plan.resetPeriodDays) used = 0;
+    }
+    plan = {
+      id: m.plan.id,
+      name: m.plan.name,
+      includedCourtBookings: m.plan.includedCourtBookings,
+      courtDiscountPct: m.plan.courtDiscountPct,
+    };
+    quotaRemaining = Math.max(0, m.plan.includedCourtBookings - used);
+  }
+
+  return {
+    id: m.id,
+    name: m.name,
+    phone: m.phone,
+    tier: m.tier,
+    plan,
+    quotaRemaining,
+  };
 }
 
 export type BookingRecord = {

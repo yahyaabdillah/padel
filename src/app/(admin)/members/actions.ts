@@ -21,6 +21,13 @@ export type MemberRecord = {
   city: string | null;
   avatar: string | null;
   createdAt: string;
+  // membership
+  planId: string | null;
+  planName: string | null;
+  planColor: string | null;
+  quotaUsed: number;
+  coachingUsed: number;
+  cycleStart: string | null;
 };
 
 export type BookingDraftInput = {
@@ -101,6 +108,7 @@ export async function getMembersAction(): Promise<MemberRecord[]> {
   const rows = await db.m_member.findMany({
     where: { companyId: session.companyId, isDeleted: 0 },
     orderBy: { createdAt: "desc" },
+    include: { plan: { select: { id: true, name: true, color: true } } },
   });
 
   return rows.map((m) => ({
@@ -116,7 +124,47 @@ export async function getMembersAction(): Promise<MemberRecord[]> {
     city: m.city,
     avatar: m.avatar,
     createdAt: m.createdAt.toISOString(),
+    planId: m.planId,
+    planName: m.plan?.name ?? null,
+    planColor: m.plan?.color ?? null,
+    quotaUsed: m.quotaUsed,
+    coachingUsed: m.coachingUsed,
+    cycleStart: m.cycleStart ? m.cycleStart.toISOString() : null,
   }));
+}
+
+/** Assign (or clear) a member's membership plan. Resets the quota cycle. */
+export async function assignMemberPlanAction(
+  memberId: string,
+  planId: string | null,
+): Promise<{ success: boolean; error?: string }> {
+  const session = await requireSession();
+  if (!session) return { success: false, error: "Not authenticated." };
+  const db = await getTenantDb();
+
+  // resolve the plan name for the legacy `tier` display field
+  let tier = "daily";
+  if (planId) {
+    const plan = await db.m_membership_plan.findFirst({
+      where: { id: planId, companyId: session.companyId, isDeleted: 0 },
+    });
+    if (!plan) return { success: false, error: "Plan tidak ditemukan." };
+    tier = plan.name.toLowerCase();
+  }
+
+  await db.m_member.updateMany({
+    where: { id: memberId, companyId: session.companyId, ...NOT_DELETED },
+    data: {
+      planId,
+      tier,
+      cycleStart: planId ? new Date() : null,
+      quotaUsed: 0,
+      coachingUsed: 0,
+      ...auditUpdate(session.userId),
+    },
+  });
+  revalidatePath("/members");
+  return { success: true };
 }
 
 export type UpdateMemberInput = {

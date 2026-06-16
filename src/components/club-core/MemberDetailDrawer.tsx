@@ -13,7 +13,9 @@ import {
   type MemberRecord,
   updateMemberAction,
   deleteMemberAction,
+  assignMemberPlanAction,
 } from "@/app/(admin)/members/actions";
+import { getPlansAction, type PlanRecord } from "@/app/(admin)/settings/plans/actions";
 
 interface MemberDetailDrawerProps {
   member: MemberRecord | null;
@@ -42,6 +44,12 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // membership assignment
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [plans, setPlans] = useState<PlanRecord[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState<string>("");
+  const [assigning, setAssigning] = useState(false);
 
   // edit form state
   const [name, setName] = useState("");
@@ -96,6 +104,34 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
       return;
     }
     toast.success("Member dihapus.");
+    onChanged?.();
+  };
+
+  const openPlanModal = async () => {
+    setSelectedPlanId(member.planId ?? "");
+    setPlanModalOpen(true);
+    try {
+      const rows = await getPlansAction();
+      setPlans(rows.filter((p) => p.active));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const assignPlan = async () => {
+    if (assigning) return;
+    setAssigning(true);
+    const res = await assignMemberPlanAction(member.id, selectedPlanId || null);
+    setAssigning(false);
+    if (!res.success) {
+      toast.error(res.error || "Gagal mengatur membership.");
+      return;
+    }
+    toast.success(
+      selectedPlanId ? "Membership diperbarui." : "Membership dihapus.",
+      "Tersimpan",
+    );
+    setPlanModalOpen(false);
     onChanged?.();
   };
 
@@ -190,6 +226,41 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
             </div>
           </dl>
         )}
+
+        {/* membership */}
+        {!editing && (
+          <div className="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-semibold text-[var(--text-heading)]">Membership</span>
+              <Button variant="outline" size="sm" onClick={openPlanModal}>
+                {member.planId ? "Ubah" : "Atur"}
+              </Button>
+            </div>
+            {member.planId ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="h-3 w-3 rounded-full"
+                    style={{ background: member.planColor ?? "#6D5BFF" }}
+                  />
+                  <span className="text-sm font-medium text-[var(--text-heading)]">
+                    {member.planName}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-400 dark:text-gray-500">Kuota terpakai</span>
+                  <span className="font-medium text-gray-800 dark:text-white/90">
+                    {member.quotaUsed}x siklus ini
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--text-caption)]">
+                Belum punya membership. Klik &quot;Atur&quot; untuk memberi plan.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <ModalDialog
@@ -217,6 +288,45 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
         <p className="text-sm text-[var(--text-caption)]">
           Tindakan ini menonaktifkan member dari daftar. Booking & riwayat tetap tersimpan.
         </p>
+      </ModalDialog>
+      <ModalDialog
+        isOpen={planModalOpen}
+        onClose={() => setPlanModalOpen(false)}
+        title="Atur Membership"
+        description={`Pilih plan untuk ${member.name}. Mengubah plan mereset siklus kuota.`}
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setPlanModalOpen(false)} disabled={assigning}>
+              Batal
+            </Button>
+            <Button variant="primary" sheen onClick={assignPlan} disabled={assigning}>
+              {assigning ? "Menyimpan…" : "Simpan"}
+            </Button>
+          </div>
+        }
+      >
+        <UiSelect
+          label="Plan membership"
+          searchable
+          placeholder="Tanpa membership"
+          options={[
+            { value: "", label: "Tanpa membership (plain)" },
+            ...plans.map((p) => ({
+              value: p.id,
+              label: p.name,
+              desc:
+                p.includedCourtBookings > 0
+                  ? `${p.includedCourtBookings}x gratis · ${p.courtDiscountPct}% off`
+                  : p.courtDiscountPct > 0
+                    ? `${p.courtDiscountPct}% off`
+                    : "Tanpa benefit booking",
+            })),
+          ]}
+          value={selectedPlanId}
+          clearable={false}
+          onChange={(v) => setSelectedPlanId(v as string)}
+        />
       </ModalDialog>
     </Drawer>
   );

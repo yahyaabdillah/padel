@@ -125,13 +125,23 @@ model m_member {
   name         String  @db.VarChar(255)
   phone        String  @db.VarChar(30)
   email        String? @db.VarChar(150)
-  /// tier economics deferred; always "daily" for now
+  /// legacy tier label (kept for display); real benefits come from planId
   tier         String  @default("daily") @db.VarChar(20)
   status       String  @default("active") @db.VarChar(20) // active|inactive|frozen
   city         String? @db.VarChar(100)
   avatar       String? @db.VarChar(255)
   onboarded    Boolean @default(false)
   lastLogin    DateTime? @db.Timestamp(0)
+
+  // ── membership assignment (benefits resolved from m_membership_plan) ──
+  /// assigned plan; null = no active membership (plain / walk-in)
+  planId         String?   @db.Uuid
+  /// ISO date the current quota cycle started (for reset rollover)
+  cycleStart     DateTime? @db.Timestamp(0)
+  /// court bookings consumed in the current cycle
+  quotaUsed      Int       @default(0)
+  /// free coaching sessions consumed in the current cycle
+  coachingUsed   Int       @default(0)
 
   // ── audit + soft delete ──
   createdAt DateTime  @default(now()) @db.Timestamp(0)
@@ -143,12 +153,56 @@ model m_member {
   isDeleted Int       @default(0)
 
   bookings m_booking[]
+  plan     m_membership_plan? @relation(fields: [planId], references: [id])
 
   @@unique([companyId, memberNo])
   @@unique([companyId, username])
   @@index([companyId])
   @@index([phone])
   @@index([status])
+  @@index([planId])
+  @@index([isDeleted])
+}
+
+/// Membership plan (benefits + court-booking quota), configured by the club.
+/// Benefits are consumed by the shared calcMembershipBenefit() helper.
+model m_membership_plan {
+  id                   String  @id @default(uuid()) @db.Uuid
+  companyId            String  @db.VarChar(50)
+  name                 String  @db.VarChar(100)
+  color                String  @default("#6D5BFF") @db.VarChar(20)
+  /// recurring fee in IDR (0 = free)
+  priceMonthly         Int     @default(0)
+  /// one-time join fee in IDR (0 = none)
+  joinFee              Int     @default(0)
+  /// free court bookings included per cycle
+  includedCourtBookings Int    @default(0)
+  /// days before the quota cycle resets (0 = never)
+  resetPeriodDays      Int     @default(30)
+  /// free coaching sessions per cycle
+  freeCoaching         Int     @default(0)
+  /// % discount on court rate after quota is used up (0–100)
+  courtDiscountPct     Int     @default(0)
+  /// marketing bullet points
+  perks                Json
+  active               Boolean @default(true)
+  highlighted          Boolean @default(false)
+  /// display order
+  sortOrder            Int     @default(0)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  members m_member[]
+
+  @@index([companyId])
+  @@index([active])
   @@index([isDeleted])
 }
 

@@ -14,6 +14,7 @@ import Button from "@/components/ui/button/Button";
 import TextInput from "@/components/ui/input/TextInput";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import { useClubData } from "@/components/club-core/ClubDataContext";
+import { calcMembershipBenefit } from "@/lib/membership-benefit";
 import {
   createBookingsAction,
   getMemberByIdAction,
@@ -117,9 +118,31 @@ export default function BookingPayment({
     [sessions],
   );
 
+  // ── apply membership benefit (quota + post-quota discount) ──
+  // Plan + remaining quota come live from the member record (DB).
+  const plan = member?.plan ?? null;
+  const benefit = useMemo(
+    () =>
+      calcMembershipBenefit({
+        plan: plan
+          ? {
+              includedCourtBookings: plan.includedCourtBookings,
+              courtDiscountPct: plan.courtDiscountPct,
+            }
+          : null,
+        quotaRemaining: member?.quotaRemaining ?? 0,
+        sessions: sessions.map((s) => ({
+          basePrice: s.price,
+          label: `${s.startLabel}–${s.endLabel}`,
+        })),
+      }),
+    [plan, member?.quotaRemaining, sessions],
+  );
+  const payableTotal = benefit.payable;
+
   const cashNum = parseInt(cash.replace(/\D/g, ""), 10) || 0;
-  const change = method === "Cash" ? cashNum - totalPrice : 0;
-  const cashShort = method === "Cash" && cashNum < totalPrice;
+  const change = method === "Cash" ? cashNum - payableTotal : 0;
+  const cashShort = method === "Cash" && cashNum < payableTotal;
 
   const pay = async () => {
     if (!court || !member || sessions.length === 0 || saving) return;
@@ -129,11 +152,17 @@ export default function BookingPayment({
     }
     setSaving(true);
 
-    const payload = sessions.map((s) => {
+    const payload = sessions.map((s, idx) => {
       const startH = Math.floor(s.startSlot / 2);
       const startM = (s.startSlot % 2) * 30;
       const endH = Math.floor(s.endSlot / 2);
       const endM = (s.endSlot % 2) * 30;
+      const line = benefit.sessions[idx];
+      const note = line?.coveredByQuota
+        ? `Gratis kuota membership · bayar ${method}`
+        : line && line.discountPct > 0
+          ? `Diskon ${line.discountPct}% · bayar ${method}`
+          : `Dibayar via ${method}`;
       return {
         courtId: court.id,
         memberId: member.id,
@@ -145,12 +174,16 @@ export default function BookingPayment({
         start: `${bookingDate}T${pad(startH)}:${pad(startM)}:00`,
         end: `${bookingDate}T${pad(endH)}:${pad(endM)}:00`,
         partySize: court.format === "single" ? 2 : 4,
-        price: s.price,
-        note: `Dibayar via ${method}`,
+        // charge the benefit-adjusted amount (quota → 0, else rate − discount)
+        price: line?.payable ?? s.price,
+        note,
       };
     });
 
-    const res = await createBookingsAction(payload);
+    const res = await createBookingsAction(payload, {
+      memberId: member.id,
+      quotaConsumed: benefit.quotaCoveredCount,
+    });
     if (!res.success || !res.ids?.length) {
       toast.error(res.error || "Gagal menyimpan booking.", "Pembayaran gagal");
       setSaving(false);
@@ -159,7 +192,7 @@ export default function BookingPayment({
 
     setConfirmedRef(res.ids[0]);
     toast.success(
-      `Pembayaran ${formatIDR(totalPrice)} diterima.`,
+      `Pembayaran ${formatIDR(payableTotal)} diterima.`,
       `${sessions.length} booking dikonfirmasi`,
     );
   };
@@ -224,9 +257,15 @@ export default function BookingPayment({
               <span className="text-[var(--text-caption)]">Metode</span>
               <span className="font-medium text-[var(--text-heading)]">{method}</span>
             </div>
+            {benefit.totalSavings > 0 && (
+              <div className="mt-1.5 flex justify-between text-emerald-600 dark:text-emerald-400">
+                <span>Hemat membership</span>
+                <span className="font-medium">−{formatIDR(benefit.totalSavings)}</span>
+              </div>
+            )}
             <div className="mt-1.5 flex justify-between">
               <span className="text-[var(--text-caption)]">Total</span>
-              <span className="font-semibold text-[var(--text-heading)]">{formatIDR(totalPrice)}</span>
+              <span className="font-semibold text-[var(--text-heading)]">{formatIDR(payableTotal)}</span>
             </div>
             {method === "Cash" && (
               <div className="mt-1.5 flex justify-between">
@@ -304,7 +343,7 @@ export default function BookingPayment({
               Kembali
             </Button>
             <Button variant="primary" sheen glow onClick={pay} disabled={saving}>
-              {saving ? "Menyimpan…" : `Bayar · ${formatIDR(totalPrice)}`}
+              {saving ? "Menyimpan…" : `Bayar · ${formatIDR(payableTotal)}`}
             </Button>
           </div>
         </Card>
@@ -318,7 +357,9 @@ export default function BookingPayment({
               <span className="text-sm font-semibold text-[var(--text-heading)]">
                 Ringkasan booking
               </span>
-              <ToneBadge tone="primary">Member</ToneBadge>
+              <ToneBadge tone={plan ? "primary" : "neutral"}>
+                {plan ? plan.name : "Non-member"}
+              </ToneBadge>
             </div>
             <dl className="space-y-2.5 text-sm">
               <Row label="Lapangan" value={court.name} />
@@ -326,29 +367,69 @@ export default function BookingPayment({
               <Row label="Member" value={member.name} />
             </dl>
 
-            {/* per-session breakdown */}
+            {/* per-session breakdown (with benefit) */}
             <div className="mt-3 space-y-1.5 border-t border-[var(--border-default)] pt-3">
-              {sessions.map((s) => (
-                <div
-                  key={s.startSlot}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <span className="text-[var(--text-caption)]">
-                    {s.startLabel}–{s.endLabel}
-                  </span>
-                  <span className="font-medium text-[var(--text-heading)]">
-                    {formatIDR(s.price)}
-                  </span>
-                </div>
-              ))}
+              {sessions.map((s, idx) => {
+                const line = benefit.sessions[idx];
+                return (
+                  <div
+                    key={s.startSlot}
+                    className="flex items-center justify-between text-sm"
+                  >
+                    <span className="text-[var(--text-caption)]">
+                      {s.startLabel}–{s.endLabel}
+                    </span>
+                    {line?.coveredByQuota ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-xs text-[var(--text-muted)] line-through">
+                          {formatIDR(s.price)}
+                        </span>
+                        <ToneBadge tone="success">Gratis</ToneBadge>
+                      </span>
+                    ) : line && line.discountPct > 0 ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-xs text-[var(--text-muted)] line-through">
+                          {formatIDR(s.price)}
+                        </span>
+                        <span className="font-medium text-[var(--text-heading)]">
+                          {formatIDR(line.payable)}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="font-medium text-[var(--text-heading)]">
+                        {formatIDR(s.price)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
-            <div className="mt-4 border-t border-[var(--border-default)] pt-4">
+            {/* savings + total */}
+            <div className="mt-3 space-y-1.5 border-t border-[var(--border-default)] pt-3 text-sm">
+              <div className="flex items-center justify-between text-[var(--text-caption)]">
+                <span>Subtotal</span>
+                <span>{formatIDR(totalPrice)}</span>
+              </div>
+              {benefit.totalSavings > 0 && (
+                <div className="flex items-center justify-between font-medium text-emerald-600 dark:text-emerald-400">
+                  <span>
+                    Hemat membership
+                    {benefit.quotaCoveredCount > 0
+                      ? ` (${benefit.quotaCoveredCount}x kuota)`
+                      : ""}
+                  </span>
+                  <span>−{formatIDR(benefit.totalSavings)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 border-t border-[var(--border-default)] pt-4">
               <p className="text-sm text-[var(--text-caption)]">
                 Total bayar · {sessions.length} jam
               </p>
               <p className="mt-1 text-3xl font-bold text-brand-600 dark:text-brand-400">
-                {formatIDR(totalPrice)}
+                {formatIDR(payableTotal)}
               </p>
             </div>
           </Card>
