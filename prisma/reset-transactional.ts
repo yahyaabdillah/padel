@@ -4,7 +4,7 @@
 //
 // Run: npm run db:reset-transactional
 //
-// Wiped (in FK-safe order): t_coaching_session → t_coaching_schedule →
+// Wiped (in FK-safe order): t_checkin → t_coaching_session → t_coaching_schedule →
 //                           t_booking_detail → t_booking → t_court_maintenance
 //                           → t_member
 // Kept: m_user, m_court, m_operating_hours, m_membership_plan, m_coach,
@@ -18,6 +18,9 @@ async function main() {
   console.log("→ Resetting transactional tables (t_*) …");
 
   // Child-first to respect foreign keys.
+  const checkin = await tenant.t_checkin.deleteMany({});
+  console.log(`   t_checkin:           ${checkin.count} removed`);
+
   const coachingSession = await tenant.t_coaching_session.deleteMany({});
   console.log(`   t_coaching_session:  ${coachingSession.count} removed`);
 

@@ -89,6 +89,40 @@ model m_user_menu {
   @@index([userId])
 }
 
+/// Company profile + operational settings — one row per tenant/club.
+/// MASTER table: survives the transactional reset.
+model m_company {
+  id        String  @id @default(uuid()) @db.Uuid
+  companyId String  @db.VarChar(50)
+  name      String  @db.VarChar(255)
+  address   String? @db.Text
+  logo      String? @db.VarChar(255) // /images/logo/xxx.png
+  phone     String? @db.VarChar(30)
+  email     String? @db.VarChar(150)
+  timezone  String  @default("Asia/Jakarta") @db.VarChar(64)
+
+  // ── check-in operational settings ──
+  /// true  = staff scans the member's booking QR (member shows QR, staff has scanner)
+  /// false = member scans the club's static QR (staff shows QR, member has scanner)
+  scanStaffBooking Boolean @default(false)
+  /// require booking start within checkinWindowMin of "now"
+  strictWindow     Boolean @default(false)
+  /// ± tolerance in minutes for the strict window
+  checkinWindowMin Int     @default(15)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  @@unique([companyId])
+  @@index([companyId])
+}
+
 /// Operating hours master — club's open window per weekday (7 rows, day 0–6).
 model m_operating_hours {
   id        Int     @id @default(autoincrement())
@@ -308,6 +342,7 @@ model t_member {
   bookings t_booking[]
   plan     m_membership_plan? @relation(fields: [planId], references: [id])
   coachingSchedules t_coaching_schedule[]
+  checkins t_checkin[]
 
   @@unique([companyId, memberNo])
   @@unique([companyId, username])
@@ -348,6 +383,7 @@ model t_booking {
 
   member  t_member?          @relation(fields: [memberId], references: [id])
   details t_booking_detail[]
+  checkins t_checkin[]
 
   @@index([companyId])
   @@index([memberId])
@@ -497,5 +533,41 @@ model t_coaching_session {
   @@index([coachId])
   @@index([start])
   @@index([status])
+  @@index([isDeleted])
+}
+
+/// A check-in event log. One row per attempt (success OR rejected) for audit.
+/// Check-in is header-level: bookingId references t_booking, and on success all
+/// of that booking's non-cancelled lines are set to checked_in.
+/// Transactional: wiped on app reset.
+model t_checkin {
+  id         String   @id @default(uuid()) @db.Uuid
+  companyId  String   @db.VarChar(50)
+  memberId   String?  @db.Uuid // resolved t_member (null only for an unresolved rejected attempt)
+  memberName String   @db.VarChar(255)
+  bookingId  String?  @db.Uuid // t_booking header (null for walk-in / no-booking reject)
+  courtName  String?  @db.VarChar(255) // denormalized label for the log feed
+  method     String   @db.VarChar(20) // manual | qr | walkin
+  result     String   @db.VarChar(20) // success | rejected
+  reason     String?  @db.Text // populated when result = rejected
+  at         DateTime @default(now()) @db.Timestamp(0)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  member  t_member?  @relation(fields: [memberId], references: [id])
+  booking t_booking? @relation(fields: [bookingId], references: [id])
+
+  @@index([companyId])
+  @@index([memberId])
+  @@index([bookingId])
+  @@index([result])
+  @@index([at])
   @@index([isDeleted])
 }

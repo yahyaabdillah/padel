@@ -31,24 +31,46 @@ const GROUP_LABEL: Record<MenuGroup, string> = {
   others: "LAINNYA",
 };
 
-export const PadelHubLogo = ({ collapsed }: { collapsed?: boolean }) => (
+export const PadelHubLogo = ({
+  collapsed,
+  name,
+  logo,
+}: {
+  collapsed?: boolean;
+  name?: string;
+  logo?: string | null;
+}) => (
   <Link href="/" className="flex items-center gap-2.5">
-    <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 shadow-[0_10px_26px_rgba(109,91,255,0.4)]">
-      <span className="h-4 w-4 rounded-full bg-accent-300 shadow-[0_0_10px_rgba(198,255,61,0.7)]" />
-    </span>
-    {!collapsed && (
-      <span className="text-xl font-extrabold leading-none text-gray-900 dark:text-white">
-        Padel
-        <span className="text-brand-500">Hub</span>
+    {logo ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={logo}
+        alt={name || "Logo"}
+        className="h-10 w-10 shrink-0 rounded-xl object-cover shadow-[0_10px_26px_rgba(109,91,255,0.25)]"
+      />
+    ) : (
+      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 shadow-[0_10px_26px_rgba(109,91,255,0.4)]">
+        <span className="h-4 w-4 rounded-full bg-accent-300 shadow-[0_0_10px_rgba(198,255,61,0.7)]" />
       </span>
     )}
+    {!collapsed &&
+      (name ? (
+        <span className="truncate text-xl font-extrabold leading-none text-gray-900 dark:text-white">
+          {name}
+        </span>
+      ) : (
+        <span className="text-xl font-extrabold leading-none text-gray-900 dark:text-white">
+          Padel
+          <span className="text-brand-500">Hub</span>
+        </span>
+      ))}
   </Link>
 );
 
 const AppSidebar: React.FC = () => {
   const { isExpanded, isMobileOpen, isHovered, setIsHovered, toggleMobileSidebar } =
     useSidebar();
-  const { menus } = useAccess();
+  const { menus, branding } = useAccess();
   const pathname = usePathname();
 
   const isSidebarOpen = isExpanded || isHovered || isMobileOpen;
@@ -116,7 +138,7 @@ const AppSidebar: React.FC = () => {
         groups={groups}
         activePath={pathname}
         collapsed={collapsed}
-        logo={<PadelHubLogo collapsed={collapsed} />}
+        logo={<PadelHubLogo collapsed={collapsed} name={branding.name} logo={branding.logo} />}
         onNavigate={() => {
           if (isMobileOpen) toggleMobileSidebar();
         }}

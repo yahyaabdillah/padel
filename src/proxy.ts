@@ -61,6 +61,17 @@ export function proxy(req: NextRequest) {
     }
   }
 
+  // Members live ONLY inside the /me portal. Any other (non-public) route is a
+  // staff/admin surface and must bounce them back to their portal home.
+  if (role === "member") {
+    const inPortal = pathname === "/me" || pathname.startsWith("/me/");
+    if (!inPortal) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/me";
+      return NextResponse.redirect(url);
+    }
+  }
+
   return NextResponse.next();
 }
 

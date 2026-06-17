@@ -18,3 +18,8 @@ export function getCustomTenantCompanyId(): string {
 }
 
 export const SESSION_COOKIE_NAME = "padelhub_session";
+
+/** HMAC secret for signing booking check-in QR tokens (with safe fallback). */
+export function getCheckinTokenSecret(): string {
+  return (process.env.CHECKIN_TOKEN_SECRET || "padelhub-checkin-fallback-secret-v1").trim();
+}

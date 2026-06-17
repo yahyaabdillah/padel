@@ -20,13 +20,18 @@ import {
   getEffectiveAccessAction,
   type EffectiveMenu,
 } from "@/app/(admin)/access/actions";
+import { getCompanyBrandingAction } from "@/app/(admin)/settings/company/actions";
 import type { MenuAction } from "@/data/padel/menu-catalog";
+
+type Branding = { name: string; logo: string | null };
 
 type AccessContextType = {
   isReady: boolean;
   isSuper: boolean;
   /** ALL active menus with this role's flags (canView may be false) */
   menus: EffectiveMenu[];
+  /** company branding (name + logo) for the sidebar/header */
+  branding: Branding;
   /** check a granular action for a menu key */
   can: (menuKey: string, action: MenuAction) => boolean;
   /** convenience: any view access to a menu key */
@@ -60,12 +65,17 @@ export const AccessProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [menus, setMenus] = useState<EffectiveMenu[]>([]);
   const [isSuper, setIsSuper] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const [branding, setBranding] = useState<Branding>({ name: "PadelHub", logo: null });
 
   const load = useCallback(async () => {
     try {
-      const res = await getEffectiveAccessAction();
+      const [res, brand] = await Promise.all([
+        getEffectiveAccessAction(),
+        getCompanyBrandingAction().catch(() => null),
+      ]);
       setMenus(res.menus);
       setIsSuper(res.isSuper);
+      if (brand) setBranding(brand);
     } catch {
       setMenus([]);
       setIsSuper(false);
@@ -122,8 +132,8 @@ export const AccessProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 
   const value = useMemo<AccessContextType>(
-    () => ({ isReady, isSuper, menus, can, canView, menuForPath, canViewPath, refresh: load }),
-    [isReady, isSuper, menus, can, canView, menuForPath, canViewPath, load],
+    () => ({ isReady, isSuper, menus, branding, can, canView, menuForPath, canViewPath, refresh: load }),
+    [isReady, isSuper, menus, branding, can, canView, menuForPath, canViewPath, load],
   );
 
   return <AccessContext.Provider value={value}>{children}</AccessContext.Provider>;
