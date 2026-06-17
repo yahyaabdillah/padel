@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as Lucide from "lucide-react";
-import { Plus, Pencil, Trash2, GripVertical } from "lucide-react";
+import { Plus, Pencil, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
 import Card from "@/components/ui/card/Card";
 import Badge from "@/components/ui/badge/Badge";
@@ -23,6 +23,7 @@ import {
   getMenusAction,
   upsertMenuAction,
   deleteMenuAction,
+  reorderMenuAction,
   type MenuRecord,
 } from "@/app/(admin)/access/actions";
 
@@ -182,13 +183,47 @@ export default function MenuBuilderPage() {
     await refresh();
   };
 
-  const Row: React.FC<{ m: MenuRecord; depth: number }> = ({ m, depth }) => (
+  const reorder = async (m: MenuRecord, direction: "up" | "down") => {
+    const res = await reorderMenuAction(m.id, direction);
+    if (!res.success) {
+      toast.error(res.error || "Gagal mengubah urutan.");
+      return;
+    }
+    await load();
+    await refresh();
+  };
+
+  const Row: React.FC<{
+    m: MenuRecord;
+    depth: number;
+    isFirst: boolean;
+    isLast: boolean;
+  }> = ({ m, depth, isFirst, isLast }) => (
     <div
       className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] px-4 py-2.5"
       style={{ marginLeft: depth * 20 }}
     >
       <div className="flex items-center gap-3">
-        <GripVertical className="h-4 w-4 text-[var(--text-muted)]/40" />
+        <div className="flex flex-col">
+          <button
+            type="button"
+            onClick={() => reorder(m, "up")}
+            disabled={isFirst}
+            className="flex h-4 w-5 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:text-[var(--color-primary)] disabled:opacity-25"
+            aria-label="Naik"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => reorder(m, "down")}
+            disabled={isLast}
+            className="flex h-4 w-5 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:text-[var(--color-primary)] disabled:opacity-25"
+            aria-label="Turun"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </div>
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--surface-muted)] text-[var(--color-primary)]">
           <IconPreview name={m.icon} className="h-4 w-4" />
         </span>
@@ -239,14 +274,23 @@ export default function MenuBuilderPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {tops.map((t) => (
-            <div key={t.id} className="space-y-2">
-              <Row m={t} depth={0} />
-              {childrenOf(t.key).map((c) => (
-                <Row key={c.id} m={c} depth={1} />
-              ))}
-            </div>
-          ))}
+          {tops.map((t, ti) => {
+            const kids = childrenOf(t.key);
+            return (
+              <div key={t.id} className="space-y-2">
+                <Row m={t} depth={0} isFirst={ti === 0} isLast={ti === tops.length - 1} />
+                {kids.map((c, ci) => (
+                  <Row
+                    key={c.id}
+                    m={c}
+                    depth={1}
+                    isFirst={ci === 0}
+                    isLast={ci === kids.length - 1}
+                  />
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
 

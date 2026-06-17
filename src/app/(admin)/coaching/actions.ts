@@ -5,6 +5,7 @@ import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
+import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";
 import {
@@ -95,8 +96,9 @@ export async function getCoachesAction(): Promise<CoachRecord[]> {
 export async function createCoachAction(
   input: CoachInput,
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("coaching.coaches", "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   if (!input.name.trim()) return { success: false, error: "Nama coach wajib diisi." };
   const db = await getTenantDb();
   const created = await db.m_coach.create({
@@ -122,9 +124,10 @@ export async function createCoachAction(
 export async function updateCoachAction(
   id: string,
   patch: Partial<CoachInput>,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("coaching.coaches", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.m_coach.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -150,9 +153,10 @@ export async function updateCoachAction(
   return { success: true };
 }
 
-export async function deleteCoachAction(id: string): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+export async function deleteCoachAction(id: string): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("coaching.coaches", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.m_coach.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -210,8 +214,9 @@ export async function getCoachPackagesAction(
 export async function createCoachPackageAction(
   input: PackageInput,
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("coaching.packages", "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   if (!input.name.trim()) return { success: false, error: "Nama paket wajib diisi." };
   if (input.sessions < 1) return { success: false, error: "Jumlah sesi minimal 1." };
   const db = await getTenantDb();
@@ -236,9 +241,10 @@ export async function createCoachPackageAction(
 export async function updateCoachPackageAction(
   id: string,
   patch: Partial<PackageInput>,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("coaching.packages", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.m_coach_package.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -258,9 +264,10 @@ export async function updateCoachPackageAction(
   return { success: true };
 }
 
-export async function deleteCoachPackageAction(id: string): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+export async function deleteCoachPackageAction(id: string): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("coaching.packages", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.m_coach_package.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -425,8 +432,9 @@ export async function createScheduleAction(input: {
   note?: string;
 }): Promise<{ success: boolean; id?: string; error?: string }> {
   try {
-    const session = await requireSession();
-    if (!session) return { success: false, error: "Not authenticated." };
+    const guard = await requirePermission("coaching.schedule", "create");
+    if (!guard.ok) return { success: false, error: guard.error };
+    const session = guard.session;
     if (!input.memberId) return { success: false, error: "Pilih member." };
     if (!input.sessions.length) return { success: false, error: "Belum ada sesi." };
 
@@ -534,9 +542,10 @@ export async function getSchedulesAction(): Promise<ScheduleRecord[]> {
 export async function reassignSessionCoachAction(
   sessionId: string,
   coachId: string | null,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("coaching.schedule", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.t_coaching_session.updateMany({
     where: { id: sessionId, companyId: session.companyId, ...NOT_DELETED },
@@ -550,9 +559,10 @@ export async function reassignSessionCoachAction(
   return { success: true };
 }
 
-export async function deleteScheduleAction(id: string): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+export async function deleteScheduleAction(id: string): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("coaching.schedule", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   // soft-delete the schedule + its sessions
   await db.t_coaching_session.updateMany({

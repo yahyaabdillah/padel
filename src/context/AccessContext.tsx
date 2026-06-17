@@ -1,11 +1,12 @@
 "use client";
 
 // PadelHub — DB-backed access context. Loads the current session's effective
-// menus + per-menu action grants (view/create/update/delete/import/export) from
-// the master DB and exposes:
+// menus + per-menu action grants (view/create/update/delete/cancel/import/
+// export) from the master DB and exposes:
 //   • menus       — the visible menu tree for the sidebar
 //   • can(key, a) — gate a page action by menu key + action
-// Super roles (level ≤ 1) implicitly get full access.
+// Only the Super Admin bypasses the matrix (full access); every other role —
+// Owner included — is governed by its grants.
 
 import React, {
   createContext,

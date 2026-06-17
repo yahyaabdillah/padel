@@ -8,6 +8,7 @@ import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
+import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";
 
@@ -34,9 +35,12 @@ export type Court = {
 export async function uploadCourtImageAction(
   dataUrl: string,
 ): Promise<{ success: boolean; path?: string; error?: string }> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return { success: false, error: "Not authenticated." };
+  // uploading an image is part of the court create/update flow
+  const guard = await requirePermission("master.courts", "update");
+  if (!guard.ok) {
+    const createGuard = await requirePermission("master.courts", "create");
+    if (!createGuard.ok) return { success: false, error: createGuard.error };
+  }
 
   const match = /^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/.exec(dataUrl);
   if (!match) return { success: false, error: "Format gambar tidak valid." };
@@ -123,12 +127,10 @@ export async function getCourtByIdAction(id: string): Promise<Court | null> {
 
 export async function createCourtAction(
   data: Omit<Court, "id">,
-): Promise<{ success: boolean; id?: string }> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return { success: false };
-
-  const session: AuthSession = JSON.parse(raw);
+): Promise<{ success: boolean; error?: string; id?: string }> {
+  const guard = await requirePermission("master.courts", "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
 
   const created = await db.m_court.create({
@@ -156,12 +158,10 @@ export async function createCourtAction(
 export async function updateCourtAction(
   id: string,
   data: Partial<Omit<Court, "id">>,
-): Promise<{ success: boolean }> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return { success: false };
-
-  const session: AuthSession = JSON.parse(raw);
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("master.courts", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
 
   await db.m_court.updateMany({
@@ -186,12 +186,10 @@ export async function updateCourtAction(
   return { success: true };
 }
 
-export async function deleteCourtAction(id: string): Promise<{ success: boolean }> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return { success: false };
-
-  const session: AuthSession = JSON.parse(raw);
+export async function deleteCourtAction(id: string): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("master.courts", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
 
   await db.m_court.updateMany({

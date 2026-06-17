@@ -58,6 +58,37 @@ model m_user {
   @@index([isDeleted])
 }
 
+/// Per-user menu access OVERRIDE. Sits ON TOP of the role's m_role_menu grants
+/// (resolved from the master DB). When a row exists for (userId, menuKey), its
+/// flags REPLACE the role grant for that menu for that user. Lives in the tenant
+/// DB because users are tenant-scoped. menuKey references master m_menu.key.
+model m_user_menu {
+  id        String  @id @default(uuid()) @db.Uuid
+  companyId String  @db.VarChar(50)
+  userId    String  @db.Uuid // m_user.id
+  menuKey   String  @db.VarChar(100) // master m_menu.key
+  canView   Boolean @default(false)
+  canCreate Boolean @default(false)
+  canUpdate Boolean @default(false)
+  canDelete Boolean @default(false)
+  canCancel Boolean @default(false)
+  canImport Boolean @default(false)
+  canExport Boolean @default(false)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  @@unique([userId, menuKey])
+  @@index([companyId])
+  @@index([userId])
+}
+
 /// Operating hours master — club's open window per weekday (7 rows, day 0–6).
 model m_operating_hours {
   id        Int     @id @default(autoincrement())

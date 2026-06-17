@@ -5,6 +5,7 @@ import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
+import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 
 async function requireSession(): Promise<AuthSession | null> {
@@ -57,8 +58,9 @@ export async function createBookingsAction(
   opts?: { memberId?: string; quotaConsumed?: number; joinFee?: number },
 ): Promise<CreateBookingsResult> {
   try {
-    const session = await requireSession();
-    if (!session) return { success: false, error: "Not authenticated." };
+    const guard = await requirePermission("booking.new", "create");
+    if (!guard.ok) return { success: false, error: guard.error };
+    const session = guard.session;
     if (!input.details.length) return { success: false, error: "No bookings." };
 
     const db = await getTenantDb();
@@ -238,9 +240,10 @@ export async function getBookingsAction(): Promise<BookingRecord[]> {
 /** Cancel a single booking session (detail line → cancelled). */
 export async function cancelBookingAction(
   id: string,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("booking.list", "cancel");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.t_booking_detail.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -253,9 +256,10 @@ export async function cancelBookingAction(
 /** Soft-delete a single booking session (detail line). */
 export async function deleteBookingAction(
   id: string,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("booking.list", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.t_booking_detail.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },

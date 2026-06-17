@@ -5,6 +5,7 @@ import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
+import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 
 async function requireSession(): Promise<AuthSession | null> {
@@ -74,8 +75,9 @@ export async function createMaintenanceAction(
   input: MaintenanceInput,
 ): Promise<{ success: boolean; error?: string; id?: string }> {
   try {
-    const session = await requireSession();
-    if (!session) return { success: false, error: "Not authenticated." };
+    const guard = await requirePermission("master.maintenance", "create");
+    if (!guard.ok) return { success: false, error: guard.error };
+    const session = guard.session;
     if (!input.courtId) return { success: false, error: "Pilih lapangan." };
     if (!input.reason.trim()) return { success: false, error: "Isi alasan." };
     const start = new Date(input.start);
@@ -109,8 +111,9 @@ export async function updateMaintenanceAction(
   id: string,
   patch: Partial<MaintenanceInput>,
 ): Promise<{ success: boolean; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("master.maintenance", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.t_court_maintenance.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -130,9 +133,10 @@ export async function updateMaintenanceAction(
 /** Soft-delete a maintenance window. */
 export async function deleteMaintenanceAction(
   id: string,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("master.maintenance", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.t_court_maintenance.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },

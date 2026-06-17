@@ -5,6 +5,7 @@ import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
+import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";
 
@@ -81,8 +82,9 @@ export async function getPlansAction(): Promise<PlanRecord[]> {
 export async function createPlanAction(
   input: PlanInput,
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("master.plans", "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   if (!input.name.trim()) return { success: false, error: "Nama plan wajib diisi." };
   const db = await getTenantDb();
   const created = await db.m_membership_plan.create({
@@ -109,9 +111,10 @@ export async function createPlanAction(
 export async function updatePlanAction(
   id: string,
   patch: Partial<PlanInput>,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("master.plans", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.m_membership_plan.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -136,9 +139,10 @@ export async function updatePlanAction(
   return { success: true };
 }
 
-export async function deletePlanAction(id: string): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+export async function deletePlanAction(id: string): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("master.plans", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.m_membership_plan.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },

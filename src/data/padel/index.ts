@@ -3,5 +3,4 @@
 // feature agents can `import { ... } from "@/data/padel"`.
 
 export * from "./tenant";
-export * from "./menus";
 export * from "./forms";

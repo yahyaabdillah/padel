@@ -6,6 +6,7 @@ import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
+import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 
 export type MemberRecord = {
@@ -191,8 +192,9 @@ export async function assignMemberPlanAction(
   memberId: string,
   planId: string | null,
 ): Promise<{ success: boolean; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("members.data", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
 
   // resolve the plan name for the legacy `tier` display field
@@ -233,8 +235,9 @@ export async function updateMemberAction(
   id: string,
   patch: UpdateMemberInput,
 ): Promise<{ success: boolean; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("members.data", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.t_member.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -254,9 +257,10 @@ export async function updateMemberAction(
 /** Soft-delete a member (audit-preserving). */
 export async function deleteMemberAction(
   id: string,
-): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("members.data", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const db = await getTenantDb();
   await db.t_member.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
@@ -281,6 +285,185 @@ export async function checkMemberUsernameAction(
   return { available: !existing };
 }
 
+/* ════════════════════════════════════════════════════════
+ *  IMPORT / EXPORT (gated by members.data import/export)
+ * ════════════════════════════════════════════════════════ */
+
+const CSV_HEADERS = ["memberNo", "name", "username", "phone", "email", "city", "status", "tier"] as const;
+
+function csvEscape(v: string): string {
+  if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+  return v;
+}
+
+/** Export all members as a CSV string. Gated by members.data:export. */
+export async function exportMembersCsvAction(): Promise<{
+  success: boolean;
+  error?: string;
+  csv?: string;
+  filename?: string;
+}> {
+  const guard = await requirePermission("members.data", "export");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
+  const db = await getTenantDb();
+  const rows = await db.t_member.findMany({
+    where: { companyId: session.companyId, ...NOT_DELETED },
+    orderBy: { createdAt: "desc" },
+  });
+  const lines = [CSV_HEADERS.join(",")];
+  for (const m of rows) {
+    lines.push(
+      [
+        m.memberNo,
+        m.name,
+        m.username,
+        m.phone,
+        m.email ?? "",
+        m.city ?? "",
+        m.status,
+        m.tier,
+      ]
+        .map((v) => csvEscape(String(v)))
+        .join(","),
+    );
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  return {
+    success: true,
+    csv: lines.join("\n"),
+    filename: `members-${stamp}.csv`,
+  };
+}
+
+export type ImportMembersResult = {
+  success: boolean;
+  error?: string;
+  created?: number;
+  skipped?: number;
+  errors?: string[];
+};
+
+/**
+ * Import members from CSV text. Expected columns (header row):
+ * name, phone, [username], [email], [city]. Each row creates a member with a
+ * generated memberNo + temp password. Rows with a duplicate username or invalid
+ * data are skipped (reported). Gated by members.data:import.
+ */
+export async function importMembersCsvAction(
+  csv: string,
+): Promise<ImportMembersResult> {
+  const guard = await requirePermission("members.data", "import");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
+  const db = await getTenantDb();
+
+  const lines = csv
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) {
+    return { success: false, error: "CSV kosong atau tanpa baris data." };
+  }
+
+  // parse header → column index
+  const header = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+  const col = (name: string) => header.indexOf(name);
+  const iName = col("name");
+  const iPhone = col("phone");
+  const iUsername = col("username");
+  const iEmail = col("email");
+  const iCity = col("city");
+  if (iName === -1 || iPhone === -1) {
+    return { success: false, error: "Header wajib: minimal 'name' dan 'phone'." };
+  }
+
+  let created = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (let r = 1; r < lines.length; r++) {
+    const cells = parseCsvLine(lines[r]);
+    const name = (cells[iName] ?? "").trim();
+    const phone = (cells[iPhone] ?? "").trim();
+    const rawUser = iUsername !== -1 ? (cells[iUsername] ?? "").trim() : "";
+    const email = iEmail !== -1 ? (cells[iEmail] ?? "").trim() : "";
+    const city = iCity !== -1 ? (cells[iCity] ?? "").trim() : "";
+
+    if (name.length < 2 || phone.replace(/\D/g, "").length < 8) {
+      skipped++;
+      errors.push(`Baris ${r + 1}: nama/telepon tidak valid.`);
+      continue;
+    }
+    const username =
+      (rawUser || name).toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 20) ||
+      `m${Date.now().toString(36)}`;
+
+    const clash = await db.t_member.findFirst({
+      where: { companyId: session.companyId, username },
+    });
+    if (clash) {
+      skipped++;
+      errors.push(`Baris ${r + 1}: username "${username}" sudah dipakai.`);
+      continue;
+    }
+
+    const tempPassword = genTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
+    await db.t_member.create({
+      data: {
+        companyId: session.companyId,
+        memberNo: genMemberNo(),
+        username,
+        passwordHash,
+        name,
+        phone,
+        email: email || null,
+        city: city || null,
+        tier: "daily",
+        status: "active",
+        onboarded: false,
+        ...auditCreate(session.userId),
+      },
+    });
+    created++;
+  }
+
+  revalidatePath("/members");
+  return { success: true, created, skipped, errors: errors.slice(0, 20) };
+}
+
+/** Minimal CSV line parser handling quoted fields. */
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
 /**
  * Register a member at the front desk. Registration is FREE (no payment for the
  * membership itself) — only court bookings (if any) carry a charged price.
@@ -291,8 +474,9 @@ export async function registerMemberAction(
   input: RegisterMemberInput,
 ): Promise<RegisterMemberResult> {
   try {
-    const session = await requireSession();
-    if (!session) return { success: false, error: "Not authenticated." };
+    const guard = await requirePermission("members.register", "create");
+    if (!guard.ok) return { success: false, error: guard.error };
+    const session = guard.session;
 
     if (!input.name?.trim() || input.name.trim().length < 2) {
       return { success: false, error: "Nama minimal 2 karakter." };

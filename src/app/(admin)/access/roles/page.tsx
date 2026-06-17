@@ -58,6 +58,33 @@ const emptyFlags = (): Flags => ({
   canExport: false,
 });
 
+/** Recompute every group-parent row as the OR-aggregate of its children, so a
+ * parent auto-unchecks when no child is checked. Pure: needs the menu list. */
+function recomputeParentsFromMenus(
+  map: Record<string, Flags>,
+  menus: MenuRecord[],
+): Record<string, Flags> {
+  const next = { ...map };
+  const tops = menus.filter((m) => m.parentKey === null);
+  for (const top of tops) {
+    const kids = menus.filter((m) => m.parentKey === top.key);
+    if (kids.length === 0) continue; // leaf top-level keeps its own flags
+    const agg = emptyFlags();
+    for (const k of kids) {
+      const kf = next[k.id] ?? emptyFlags();
+      agg.canView = agg.canView || kf.canView;
+      agg.canCreate = agg.canCreate || kf.canCreate;
+      agg.canUpdate = agg.canUpdate || kf.canUpdate;
+      agg.canDelete = agg.canDelete || kf.canDelete;
+      agg.canCancel = agg.canCancel || kf.canCancel;
+      agg.canImport = agg.canImport || kf.canImport;
+      agg.canExport = agg.canExport || kf.canExport;
+    }
+    next[top.id] = agg;
+  }
+  return next;
+}
+
 const ACTION_FLAG: Record<MenuAction, keyof Flags> = {
   view: "canView",
   create: "canCreate",
@@ -129,8 +156,11 @@ export default function RolesPermissionsPage() {
         canExport: p.canExport,
       };
     });
-    setMatrix(map);
-  }, []);
+    // Parent (group) rows always reflect the aggregate of their children so the
+    // displayed parent checkboxes stay consistent with what actually governs.
+    setMatrix(recomputeParentsFromMenus(map, menus));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menus]);
 
   useEffect(() => {
     if (selectedRoleId) void loadMatrix(selectedRoleId);
@@ -148,21 +178,44 @@ export default function RolesPermissionsPage() {
 
   const flagsFor = (menuId: string): Flags => matrix[menuId] ?? emptyFlags();
 
-  const toggle = (menuId: string, action: MenuAction) => {
+  // Apply one action toggle to a single row's flags, honoring the rule
+  // "no action without View": turning a non-view action ON also turns View ON;
+  // turning View OFF clears every action on that row.
+  const applyAction = (cur: Flags, action: MenuAction, value: boolean): Flags => {
+    if (action === "view" && value === false) return emptyFlags();
+    const flag = ACTION_FLAG[action];
+    const next = { ...cur, [flag]: value };
+    if (value && action !== "view") next.canView = true;
+    return next;
+  };
+
+  // Parent (group) rows mirror the aggregate of their children: a parent flag is
+  // ON when ANY child has it ON. Recompute after any child change so the parent
+  // auto-unchecks when no child is checked.
+  const recomputeParents = (m: Record<string, Flags>): Record<string, Flags> =>
+    recomputeParentsFromMenus(m, menus);
+
+  const toggle = (menu: MenuRecord, action: MenuAction) => {
     setMatrix((prev) => {
-      const cur = prev[menuId] ?? emptyFlags();
-      const flag = ACTION_FLAG[action];
-      const next = { ...cur, [flag]: !cur[flag] };
-      // turning on any action implies view
-      if (action !== "view" && next[flag]) next.canView = true;
-      return { ...prev, [menuId]: next };
+      const kids = childrenOf(menu.key);
+      let next = { ...prev };
+      if (kids.length > 0) {
+        // Parent group: this column acts as a bulk control over all children.
+        const newValue = !flagsFor(menu.id)[ACTION_FLAG[action]];
+        for (const k of kids) {
+          next[k.id] = applyAction(next[k.id] ?? emptyFlags(), action, newValue);
+        }
+      } else {
+        const cur = next[menu.id] ?? emptyFlags();
+        next[menu.id] = applyAction(cur, action, !cur[ACTION_FLAG[action]]);
+      }
+      return recomputeParents(next);
     });
   };
 
-  const toggleAll = (menuId: string, on: boolean) => {
-    setMatrix((prev) => ({
-      ...prev,
-      [menuId]: {
+  const toggleAll = (menu: MenuRecord, on: boolean) => {
+    setMatrix((prev) => {
+      const all: Flags = {
         canView: on,
         canCreate: on,
         canUpdate: on,
@@ -170,8 +223,16 @@ export default function RolesPermissionsPage() {
         canCancel: on,
         canImport: on,
         canExport: on,
-      },
-    }));
+      };
+      const kids = childrenOf(menu.key);
+      let next = { ...prev };
+      if (kids.length > 0) {
+        for (const k of kids) next[k.id] = { ...all };
+      } else {
+        next[menu.id] = { ...all };
+      }
+      return recomputeParents(next);
+    });
   };
 
   const save = async () => {
@@ -184,7 +245,10 @@ export default function RolesPermissionsPage() {
       toast.error(res.error || "Gagal menyimpan.");
       return;
     }
-    toast.success("Permission tersimpan.", "Berhasil");
+    toast.success(
+      "Permission tersimpan. Perubahan untuk user lain berlaku setelah mereka login ulang.",
+      "Berhasil",
+    );
   };
 
   const saveRole = async () => {
@@ -278,7 +342,7 @@ export default function RolesPermissionsPage() {
                       <span className="flex items-center gap-2">
                         <Shield className="h-4 w-4" />
                         {r.name}
-                        {r.isSystem && <Lock className="h-3 w-3 opacity-40" />}
+                        {r.key === "superadmin" && <Lock className="h-3 w-3 opacity-40" />}
                       </span>
                       <ChevronRight className={`h-4 w-4 transition-transform ${active ? "translate-x-0.5" : ""}`} />
                     </button>
@@ -294,7 +358,7 @@ export default function RolesPermissionsPage() {
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
-                      {!r.isSystem && (
+                      {r.key !== "superadmin" && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -376,8 +440,8 @@ export default function RolesPermissionsPage() {
                             })
                         : undefined
                     }
-                    onToggle={(a) => toggle(top.id, a)}
-                    onToggleAll={(on) => toggleAll(top.id, on)}
+                    onToggle={(a) => toggle(top, a)}
+                    onToggleAll={(on) => toggleAll(top, on)}
                   />
                   {hasKids &&
                     open &&
@@ -388,8 +452,8 @@ export default function RolesPermissionsPage() {
                         icon={c.icon}
                         flags={flagsFor(c.id)}
                         depth={1}
-                        onToggle={(a) => toggle(c.id, a)}
-                        onToggleAll={(on) => toggleAll(c.id, on)}
+                        onToggle={(a) => toggle(c, a)}
+                        onToggleAll={(on) => toggleAll(c, on)}
                       />
                     ))}
                 </div>

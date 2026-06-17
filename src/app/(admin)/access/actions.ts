@@ -9,8 +9,10 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { masterPrisma } from "@/lib/master-db";
+import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
+import { requirePermission } from "@/lib/access-guard";
 
 async function requireSession(): Promise<AuthSession | null> {
   const cookieStore = await cookies();
@@ -99,8 +101,9 @@ export async function upsertRoleAction(
   id: string | null,
   input: RoleInput,
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("access.roles", id ? "update" : "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   if (!input.name.trim()) return { success: false, error: "Nama role wajib diisi." };
 
   try {
@@ -149,15 +152,37 @@ export async function upsertRoleAction(
 }
 
 export async function deleteRoleAction(id: string): Promise<{ success: boolean; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("access.roles", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   const role = await masterPrisma.m_role.findUnique({ where: { id } });
   if (!role) return { success: false, error: "Role tidak ditemukan." };
-  if (role.isSystem) return { success: false, error: "Role sistem tidak bisa dihapus." };
+  if (role.key === "superadmin") {
+    return { success: false, error: "Role Super Admin tidak bisa dihapus." };
+  }
+
+  // block deleting a role that still has internal users assigned to it
+  try {
+    const db = await getTenantDb();
+    const inUse = await db.m_user.count({
+      where: { companyId: session.companyId, roleKey: role.key, isDeleted: 0 },
+    });
+    if (inUse > 0) {
+      return {
+        success: false,
+        error: `Role masih dipakai ${inUse} user. Pindahkan user dulu sebelum menghapus.`,
+      };
+    }
+  } catch {
+    /* if tenant lookup fails, fall through and allow delete */
+  }
+
   await masterPrisma.m_role.update({
     where: { id },
     data: { isDeleted: 1, deletedAt: new Date(), deletedBy: session.userId },
   });
+  // also clear its menu grants
+  await masterPrisma.m_role_menu.deleteMany({ where: { roleId: id } });
   revalidatePath("/access/roles");
   return { success: true };
 }
@@ -205,8 +230,9 @@ export async function upsertMenuAction(
   id: string | null,
   input: MenuInput,
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("access.menus", id ? "update" : "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   if (!input.label.trim()) return { success: false, error: "Label menu wajib diisi." };
 
   try {
@@ -260,14 +286,58 @@ export async function upsertMenuAction(
   }
 }
 
-export async function deleteMenuAction(id: string): Promise<{ success: boolean }> {
-  const session = await requireSession();
-  if (!session) return { success: false };
+export async function deleteMenuAction(id: string): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("access.menus", "delete");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   await masterPrisma.m_menu.update({
     where: { id },
     data: { isDeleted: 1, deletedAt: new Date(), deletedBy: session.userId },
   });
   revalidatePath("/access/menus");
+  return { success: true };
+}
+
+/** Move a menu up/down within its sibling group by swapping sortOrder. */
+export async function reorderMenuAction(
+  id: string,
+  direction: "up" | "down",
+): Promise<{ success: boolean; error?: string }> {
+  const guard = await requirePermission("access.menus", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
+
+  const current = await masterPrisma.m_menu.findUnique({ where: { id } });
+  if (!current || current.isDeleted !== 0) {
+    return { success: false, error: "Menu tidak ditemukan." };
+  }
+
+  // siblings = same parentKey, ordered
+  const siblings = await masterPrisma.m_menu.findMany({
+    where: { parentKey: current.parentKey, isDeleted: 0 },
+    orderBy: { sortOrder: "asc" },
+  });
+  const idx = siblings.findIndex((s) => s.id === id);
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= siblings.length) {
+    return { success: true }; // already at the edge, no-op
+  }
+  const other = siblings[swapIdx];
+
+  // swap sortOrder values
+  await masterPrisma.$transaction([
+    masterPrisma.m_menu.update({
+      where: { id: current.id },
+      data: { sortOrder: other.sortOrder, updatedBy: session.userId },
+    }),
+    masterPrisma.m_menu.update({
+      where: { id: other.id },
+      data: { sortOrder: current.sortOrder, updatedBy: session.userId },
+    }),
+  ]);
+
+  revalidatePath("/access/menus");
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -313,8 +383,9 @@ export async function saveRoleMenuPermissionsAction(
   roleId: string,
   rows: RoleMenuMatrixInput[],
 ): Promise<{ success: boolean; error?: string }> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated." };
+  const guard = await requirePermission("access.roles", "update");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
   try {
     await masterPrisma.m_role_menu.deleteMany({ where: { roleId } });
     const keep = rows.filter(
@@ -360,7 +431,7 @@ export type EffectiveMenu = MenuRecord & MenuActions;
 
 export type EffectiveAccess = {
   roleKey: string;
-  /** super roles (level <= 1) get full access to everything */
+  /** the Super Admin bypasses the matrix and gets full access to everything */
   isSuper: boolean;
   /** ALL active menus with the role's resolved action flags (not pre-filtered).
    * The sidebar filters to canView; route/action gating reads the flags. */
@@ -368,17 +439,20 @@ export type EffectiveAccess = {
 };
 
 /**
- * Resolve every active menu + the current role's per-menu action grants. Super
- * roles (level ≤ 1: superadmin/owner) implicitly get all actions on all menus.
- * Returns ALL active menus (canView may be false) so the caller can both render
- * the sidebar (filter canView) and hard-gate routes/actions by the flags.
+ * Resolve every active menu + the current role's per-menu action grants. Only
+ * the Super Admin bypasses the matrix (full access). Every other role — Owner
+ * included — is governed by its m_role_menu grants. Returns ALL active menus
+ * (canView may be false) so the caller can both render the sidebar (filter
+ * canView) and hard-gate routes/actions by the flags.
  */
 export async function getEffectiveAccessAction(): Promise<EffectiveAccess> {
   const session = await requireSession();
   if (!session) return { roleKey: "", isSuper: false, menus: [] };
 
   const role = await masterPrisma.m_role.findUnique({ where: { key: session.role } });
-  const isSuper = (role?.level ?? 5) <= 1;
+  // Only the platform Super Admin bypasses the matrix. Every other role —
+  // including Owner — is governed by its m_role_menu grants.
+  const isSuper = session.role === "superadmin";
 
   const menus = await masterPrisma.m_menu.findMany({
     where: { isActive: true, ...NOT_DELETED },
@@ -423,7 +497,36 @@ export async function getEffectiveAccessAction(): Promise<EffectiveAccess> {
   });
   const permByMenu = new Map(perms.map((p) => [p.menuId, p]));
 
+  // Per-user overrides (tenant DB) keyed by menu KEY — replace the role grant.
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const overrideByKey = new Map<string, MenuActions>();
+  if (session.id && uuidRe.test(session.id)) {
+    try {
+      const db = await getTenantDb();
+      const overrides = await db.m_user_menu.findMany({
+        where: { companyId: session.companyId, userId: session.id, isDeleted: 0 },
+      });
+      for (const o of overrides) {
+        overrideByKey.set(o.menuKey, {
+          canView: o.canView,
+          canCreate: o.canCreate,
+          canUpdate: o.canUpdate,
+          canDelete: o.canDelete,
+          canCancel: o.canCancel,
+          canImport: o.canImport,
+          canExport: o.canExport,
+        });
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
   const effective: EffectiveMenu[] = menus.map((m) => {
+    const override = overrideByKey.get(m.key);
+    if (override) {
+      return { ...base(m), ...override };
+    }
     const p = permByMenu.get(m.id);
     return {
       ...base(m),
