@@ -18,6 +18,7 @@ import {
   type DayOperatingHours,
 } from "@/context/OperatingHoursContext";
 import { weekdayMeta } from "@/data/padel/club/courts";
+import TimeGroupsPanel from "./TimeGroupsPanel";
 
 const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
 
@@ -109,98 +110,103 @@ export default function OperatingHoursMasterPage() {
         </Button>
       </div>
 
-      <Card padding="none">
-        <div className="divide-y divide-[var(--border-light)]">
-          {ordered.map((h) => {
-            const meta = weekdayMeta.find((w) => w.value === h.day)!;
-            return (
-              <div key={h.day} className="px-5 py-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                  <div className="flex w-40 items-center gap-3">
-                    <Switch
-                      checked={h.open}
-                      onChange={(v) => updateDay(h.day, { open: v })}
-                    />
-                    <span className="font-medium text-[var(--text-heading)]">
-                      {meta.label}
-                    </span>
-                  </div>
-
-                  {h.open ? (
-                    <div className="flex flex-1 flex-wrap items-center gap-x-5 gap-y-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                          Jam Buka
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* LEFT/TOP — operating hours */}
+        <div className="lg:col-span-2">
+          <Card padding="none">
+            <div className="divide-y divide-[var(--border-light)]">
+              {ordered.map((h) => {
+                const meta = weekdayMeta.find((w) => w.value === h.day)!;
+                return (
+                  <div key={h.day} className="px-5 py-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                      <div className="flex w-40 items-center gap-3">
+                        <Switch
+                          checked={h.open}
+                          onChange={(v) => updateDay(h.day, { open: v })}
+                        />
+                        <span className="font-medium text-[var(--text-heading)]">
+                          {meta.label}
                         </span>
-                        <HourSelect
-                          value={h.openStart}
-                          onChange={(v) =>
-                            updateDay(h.day, {
-                              openStart: v,
-                              openEnd: Math.max(h.openEnd, v + 1),
-                            })
-                          }
-                          options={Array.from({ length: 24 }, (_, i) => i).filter(
-                            (i) => i < h.openEnd,
-                          )}
-                        />
-                        <span className="text-[var(--text-muted)]">–</span>
-                        <HourSelect
-                          value={h.openEnd}
-                          onChange={(v) => updateDay(h.day, { openEnd: v })}
-                          options={Array.from({ length: 24 }, (_, i) => i + 1).filter(
-                            (i) => i > h.openStart,
-                          )}
-                        />
                       </div>
-                      <Badge size="sm" color="success" variant="light">
-                        {h.openEnd - h.openStart} jam / hari
-                      </Badge>
-                    </div>
-                  ) : (
-                    <div className="flex-1">
-                      <Badge color="neutral" variant="light">
-                        Tutup
-                      </Badge>
-                    </div>
-                  )}
-                </div>
 
-                {/* Salin Senin → Hari Kerja — only under the Monday row */}
-                {h.day === 1 && (
-                  <div className="mt-3 flex items-center gap-2 pl-[3.25rem]">
-                    <Button variant="outline" size="sm" onClick={copyMonToWeekdays}>
-                      Salin Senin → Hari Kerja
-                    </Button>
-                    <Tooltip
-                      content="Salin jam buka & tutup Senin ke seluruh hari kerja (Senin–Jumat)."
-                      placement="right"
-                    >
-                      <button
-                        type="button"
-                        aria-label="Info salin jam Senin"
-                        className="flex h-5 w-5 items-center justify-center rounded-full text-[var(--text-muted)] transition-colors hover:bg-[var(--color-primary-light)] hover:text-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[rgba(37,99,235,0.18)]"
-                      >
-                        <Info className="h-3.5 w-3.5" />
-                      </button>
-                    </Tooltip>
+                      {h.open ? (
+                        <div className="flex flex-1 flex-wrap items-center gap-x-5 gap-y-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                              Jam Buka
+                            </span>
+                            <HourSelect
+                              value={h.openStart}
+                              onChange={(v) =>
+                                updateDay(h.day, {
+                                  openStart: v,
+                                  openEnd: Math.max(h.openEnd, v + 1),
+                                })
+                              }
+                              options={Array.from({ length: 24 }, (_, i) => i).filter(
+                                (i) => i < h.openEnd,
+                              )}
+                            />
+                            <span className="text-[var(--text-muted)]">–</span>
+                            <HourSelect
+                              value={h.openEnd}
+                              onChange={(v) => updateDay(h.day, { openEnd: v })}
+                              options={Array.from({ length: 24 }, (_, i) => i + 1).filter(
+                                (i) => i > h.openStart,
+                              )}
+                            />
+                          </div>
+                          <Badge size="sm" color="success" variant="light">
+                            {h.openEnd - h.openStart} jam / hari
+                          </Badge>
+                        </div>
+                      ) : (
+                        <div className="flex-1">
+                          <Badge color="neutral" variant="light">
+                            Tutup
+                          </Badge>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Salin Senin → Hari Kerja — only under the Monday row */}
+                    {h.day === 1 && (
+                      <div className="mt-3 flex items-center gap-2 pl-[3.25rem]">
+                        <Button variant="outline" size="sm" onClick={copyMonToWeekdays}>
+                          Salin Senin → Hari Kerja
+                        </Button>
+                        <Tooltip
+                          content="Salin jam buka & tutup Senin ke seluruh hari kerja (Senin–Jumat)."
+                          placement="right"
+                        >
+                          <button
+                            type="button"
+                            aria-label="Info salin jam Senin"
+                            className="flex h-5 w-5 items-center justify-center rounded-full text-[var(--text-muted)] transition-colors hover:bg-[var(--color-primary-light)] hover:text-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[rgba(37,99,235,0.18)]"
+                          >
+                            <Info className="h-3.5 w-3.5" />
+                          </button>
+                        </Tooltip>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </Card>
+                );
+              })}
+            </div>
+          </Card>
 
-      <div className="mt-4">
-        <InputLabel
-          label=""
-          className="mb-0"
-          tooltip="Perubahan otomatis tersimpan."
-        />
-        <p className="text-xs text-[var(--text-caption)]">
-          Perubahan otomatis tersimpan.
-        </p>
+          <div className="mt-4">
+            <p className="text-xs text-[var(--text-caption)]">
+              Perubahan jam operasional otomatis tersimpan.
+            </p>
+          </div>
+        </div>
+
+        {/* RIGHT/BOTTOM — time groupings */}
+        <div className="lg:col-span-1">
+          <TimeGroupsPanel />
+        </div>
       </div>
     </div>
   );

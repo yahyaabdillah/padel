@@ -145,6 +145,34 @@ model m_operating_hours {
   @@index([companyId])
 }
 
+/// Time-of-day grouping master (e.g. Pagi 08–12, Siang 12–15, Sore 15–18,
+/// Malam 18–23). Club-wide buckets used to label/segment booking time ranges.
+/// Each group's [startHour, endHour) must fall within the club's operating
+/// window for the relevant day(s); validation is enforced in the server action.
+model m_time_group {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.VarChar(50)
+  name      String @db.VarChar(60)
+  /// inclusive start hour 0–23
+  startHour Int
+  /// exclusive end hour 1–24
+  endHour   Int
+  color     String @default("#6D5BFF") @db.VarChar(20)
+  sortOrder Int    @default(0)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  @@index([companyId])
+  @@index([isDeleted])
+}
+
 /// Court master — padel courts owned by this tenant/club.
 model m_court {
   id           String  @id @default(uuid()) @db.Uuid

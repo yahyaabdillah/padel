@@ -6,7 +6,7 @@
 //           chosen time) across all active courts. Click a time → navigate to
 //           the court-selection page (/bookings/courts) for that date + time.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, CalendarDays, Clock, ChevronRight } from "lucide-react";
 import Card from "@/components/ui/card/Card";
@@ -25,6 +25,10 @@ import {
   type BlockingWindow,
 } from "@/data/padel/club/courts";
 import { dateKey } from "@/data/padel/club/bookings";
+import {
+  getTimeGroupsAction,
+  type TimeGroup,
+} from "@/app/(admin)/settings/hours/group-actions";
 
 const todayKey = "2026-06-02";
 
@@ -55,6 +59,13 @@ export default function NewBookingSearch() {
     dateKey: string;
     startTime: string;
   } | null>(null);
+  const [timeGroups, setTimeGroups] = useState<TimeGroup[]>([]);
+
+  useEffect(() => {
+    void getTimeGroupsAction()
+      .then(setTimeGroups)
+      .catch(() => setTimeGroups([]));
+  }, []);
 
   const activeCourts = useMemo(
     () => courts.filter((c) => c.status === "active"),
@@ -112,6 +123,40 @@ export default function NewBookingSearch() {
     });
     router.push(`/bookings/courts?${params.toString()}`);
   };
+
+  /** Bucket the available time options into the configured time groups. A slot
+   * belongs to a group if its START hour is within [startHour, endHour). Any
+   * slot not covered by a group falls into "Lainnya". Empty groups are hidden. */
+  const groupedResults = useMemo(() => {
+    if (!results) return [];
+    const startHourOf = (startSlot: number) => Math.floor((startSlot * 30) / 60);
+
+    const buckets: { key: string; name: string; color: string; items: TimeOption[] }[] = [];
+    const sortedGroups = [...timeGroups].sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.startHour - b.startHour,
+    );
+    for (const g of sortedGroups) {
+      buckets.push({ key: g.id, name: g.name, color: g.color, items: [] });
+    }
+    const other: TimeOption[] = [];
+
+    for (const t of results) {
+      const h = startHourOf(t.startSlot);
+      const g = sortedGroups.find((grp) => h >= grp.startHour && h < grp.endHour);
+      if (g) {
+        const bucket = buckets.find((b) => b.key === g.id)!;
+        bucket.items.push(t);
+      } else {
+        other.push(t);
+      }
+    }
+
+    const out = buckets.filter((b) => b.items.length > 0);
+    if (other.length > 0) {
+      out.push({ key: "__other", name: "Lainnya", color: "#94A3B8", items: other });
+    }
+    return out;
+  }, [results, timeGroups]);
 
   if (!isReady || !hoursReady) {
     return (
@@ -195,30 +240,51 @@ export default function NewBookingSearch() {
               description="Coba ubah tanggal atau jam mulai untuk menemukan slot yang kosong."
             />
           ) : (
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-              {results.map((t) => (
-                <button
-                  key={t.startSlot}
-                  type="button"
-                  onClick={() => goToCourts(t.startSlot)}
-                  className="flex items-center gap-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-4 text-left transition-all hover:border-[var(--color-primary)] hover:ring-1 hover:ring-[var(--color-primary)]"
+            <div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-start">
+              {groupedResults.map((group) => (
+                <div
+                  key={group.key}
+                  className="w-full lg:w-[260px] lg:flex-none rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)]/40 p-3"
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary-light)] text-[var(--color-primary)]">
-                    <Clock className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-[var(--text-heading)]">
-                      {t.startLabel}–{t.endLabel}
-                    </p>
-                    <p className="truncate text-xs text-[var(--text-caption)]">
-                      {t.courtCount} lapangan tersedia
-                    </p>
+                  <div className="mb-3 flex items-center gap-2 px-1">
+                    <span
+                      className="h-3 w-3 shrink-0 rounded-full"
+                      style={{ background: group.color }}
+                    />
+                    <h4 className="text-sm font-semibold text-[var(--text-heading)]">
+                      {group.name}
+                    </h4>
+                    <span className="ml-auto text-xs text-[var(--text-muted)]">
+                      {group.items.length} jam
+                    </span>
                   </div>
-                  <span className="ml-auto flex shrink-0 items-center gap-2">
-                    <ToneBadge tone="success">{t.courtCount}</ToneBadge>
-                    <ChevronRight className="h-4 w-4 text-[var(--text-muted)]" />
-                  </span>
-                </button>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
+                    {group.items.map((t) => (
+                      <button
+                        key={t.startSlot}
+                        type="button"
+                        onClick={() => goToCourts(t.startSlot)}
+                        className="flex items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-3 text-left transition-all hover:border-[var(--color-primary)] hover:ring-1 hover:ring-[var(--color-primary)]"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary-light)] text-[var(--color-primary)]">
+                          <Clock className="h-4.5 w-4.5" />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-[var(--text-heading)]">
+                            {t.startLabel}–{t.endLabel}
+                          </p>
+                          <p className="truncate text-xs text-[var(--text-caption)]">
+                            {t.courtCount} lapangan
+                          </p>
+                        </div>
+                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                          <ToneBadge tone="success">{t.courtCount}</ToneBadge>
+                          <ChevronRight className="h-4 w-4 text-[var(--text-muted)]" />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
