@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { ThemeToggleButton } from "@/components/common/ThemeToggleButton";
 import NotificationDropdown from "@/components/header/NotificationDropdown";
 import { useSidebar } from "@/context/SidebarContext";
+import { useAccess } from "@/context/AccessContext";
 import {
   mockLoginUsers,
   roleLabels,
@@ -161,6 +162,7 @@ const AppHeader: React.FC = () => {
   const [isApplicationMenuOpen, setApplicationMenuOpen] = useState(false);
   const { isMobileOpen, toggleSidebar, toggleMobileSidebar } = useSidebar();
   const { currentRole } = useRole();
+  const { branding } = useAccess();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleToggle = () => {
@@ -211,12 +213,27 @@ const AppHeader: React.FC = () => {
 
           <Link href="/" className="lg:hidden">
             <span className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 shadow-[0_10px_24px_rgba(109,91,255,0.32)]">
-                <span className="h-3 w-3 rounded-full bg-accent-300" />
-              </span>
-              <span className="text-lg font-bold text-gray-900 dark:text-white">
-                Padel<span className="text-brand-500">Hub</span>
-              </span>
+              {branding.logo ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={branding.logo}
+                  alt={branding.name || "Logo"}
+                  className="h-8 w-8 shrink-0 rounded-lg object-cover shadow-[0_10px_24px_rgba(109,91,255,0.32)]"
+                />
+              ) : (
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 shadow-[0_10px_24px_rgba(109,91,255,0.32)]">
+                  <span className="h-3 w-3 rounded-full bg-accent-300" />
+                </span>
+              )}
+              {branding.name ? (
+                <span className="max-w-[180px] truncate text-lg font-bold text-gray-900 dark:text-white">
+                  {branding.name}
+                </span>
+              ) : (
+                <span className="text-lg font-bold text-gray-900 dark:text-white">
+                  Padel<span className="text-brand-500">Hub</span>
+                </span>
+              )}
             </span>
           </Link>
 

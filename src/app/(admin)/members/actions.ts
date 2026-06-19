@@ -8,6 +8,7 @@ import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
 import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
+import { applyMembershipAction, recordPayment } from "@/lib/checkout-core";
 
 export type MemberRecord = {
   id: string;
@@ -187,7 +188,14 @@ export async function getMembersAction(): Promise<MemberRecord[]> {
   }));
 }
 
-/** Assign (or clear) a member's membership plan. Resets the quota cycle. */
+/**
+ * Assign (or clear) a member's membership plan from the member detail drawer.
+ * Assigning a plan routes through the shared checkout core so a
+ * t_membership_history row (and a payment record when a join fee applies) is
+ * written — the join fee is NEVER recorded on t_booking. Clearing a plan
+ * (planId = null) is an admin correction, not a purchase, so it writes no
+ * history/payment. Resets the quota cycle on assign.
+ */
 export async function assignMemberPlanAction(
   memberId: string,
   planId: string | null,
@@ -197,27 +205,75 @@ export async function assignMemberPlanAction(
   const session = guard.session;
   const db = await getTenantDb();
 
-  // resolve the plan name for the legacy `tier` display field
-  let tier = "daily";
-  if (planId) {
-    const plan = await db.m_membership_plan.findFirst({
-      where: { id: planId, companyId: session.companyId, isDeleted: 0 },
+  const member = await db.t_member.findFirst({
+    where: { id: memberId, companyId: session.companyId, ...NOT_DELETED },
+    select: { id: true, planId: true },
+  });
+  if (!member) return { success: false, error: "Member tidak ditemukan." };
+
+  // Clear membership (admin correction; not a purchase → no history/payment).
+  if (!planId) {
+    await db.t_member.updateMany({
+      where: { id: memberId, companyId: session.companyId, ...NOT_DELETED },
+      data: {
+        planId: null,
+        tier: "daily",
+        cycleStart: null,
+        quotaUsed: 0,
+        coachingUsed: 0,
+        joinFeePaid: false,
+        ...auditUpdate(session.userId),
+      },
     });
-    if (!plan) return { success: false, error: "Plan tidak ditemukan." };
-    tier = plan.name.toLowerCase();
+    revalidatePath("/members");
+    return { success: true };
   }
 
-  await db.t_member.updateMany({
-    where: { id: memberId, companyId: session.companyId, ...NOT_DELETED },
-    data: {
-      planId,
-      tier,
-      cycleStart: planId ? new Date() : null,
-      quotaUsed: 0,
-      coachingUsed: 0,
-      ...auditUpdate(session.userId),
-    },
+  // Assign / change plan → history (+ payment when a join fee applies) via core.
+  const plan = await db.m_membership_plan.findFirst({
+    where: { id: planId, companyId: session.companyId, active: true, ...NOT_DELETED },
   });
+  if (!plan) return { success: false, error: "Plan tidak ditemukan." };
+
+  // Same plan re-set = extend; different existing plan = upgrade; none = assign.
+  const action: "assign" | "extend" | "upgrade" = !member.planId
+    ? "assign"
+    : member.planId === planId
+      ? "extend"
+      : "upgrade";
+
+  try {
+    await db.$transaction(async (tx) => {
+      const hist = await applyMembershipAction(tx, {
+        companyId: session.companyId,
+        memberId: member.id,
+        planId: plan.id,
+        action,
+        actor: { kind: "staff", userId: session.userId },
+        joinFee: plan.joinFee,
+        method: plan.joinFee > 0 ? "Cash" : undefined,
+      });
+      if (plan.joinFee > 0) {
+        const pay = await recordPayment(tx, {
+          companyId: session.companyId,
+          method: "Cash",
+          membershipAmount: plan.joinFee,
+          courtAmount: 0,
+          paidByType: "staff",
+          cashReceived: plan.joinFee,
+          actor: { kind: "staff", userId: session.userId },
+        });
+        await tx.t_membership_history.update({
+          where: { id: hist.historyId },
+          data: { paymentId: pay.id },
+        });
+      }
+    });
+  } catch (err) {
+    console.error("[assignMemberPlanAction] error:", err);
+    return { success: false, error: "Gagal mengatur membership." };
+  }
+
   revalidatePath("/members");
   return { success: true };
 }
@@ -504,23 +560,23 @@ export async function registerMemberAction(
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
     // Resolve the membership plan (if any) for assignment + tier label.
-    let planId: string | null = null;
-    let tier = "daily";
-    let joinFee = 0;
+    let planRow: { id: string; name: string; joinFee: number } | null = null;
     if (input.planId) {
       const plan = await db.m_membership_plan.findFirst({
         where: { id: input.planId, companyId: session.companyId, active: true, ...NOT_DELETED },
       });
       if (!plan) return { success: false, error: "Plan membership tidak ditemukan." };
-      planId = plan.id;
-      tier = plan.name.toLowerCase();
-      joinFee = plan.joinFee;
+      planRow = { id: plan.id, name: plan.name, joinFee: plan.joinFee };
     }
 
     // Whether the join fee is settled at registration (page checkout) or left
     // outstanding to be collected at the booking payment step (modal flow).
-    const joinFeePaidNow = Boolean(planId) && (joinFee === 0 || input.collectJoinFee === true);
+    const joinFeePaidNow = Boolean(planRow) && (planRow!.joinFee === 0 || input.collectJoinFee === true);
+    const joinFeeCharged = joinFeePaidNow && planRow!.joinFee > 0 ? planRow!.joinFee : 0;
 
+    // Create the member WITHOUT a plan; the membership is then applied through
+    // the shared core so a t_membership_history row (+ payment) is written and
+    // the join fee is NEVER recorded on t_booking.
     const member = await db.t_member.create({
       data: {
         companyId: session.companyId,
@@ -530,81 +586,97 @@ export async function registerMemberAction(
         name: input.name.trim(),
         phone: input.phone,
         email: input.email?.trim() || null,
-        tier,
+        tier: "daily",
         status: "active",
         onboarded: false,
         city: input.city?.trim() || null,
-        planId,
-        cycleStart: planId ? new Date() : null,
-        quotaUsed: 0,
-        coachingUsed: 0,
-        joinFeePaid: joinFeePaidNow,
         ...auditCreate(session.userId),
       },
     });
 
-    // Join fee collected at registration checkout is recorded on the booking
-    // header (court bookings) or as a standalone fee-only transaction.
-    const joinFeeCharged = joinFeePaidNow && joinFee > 0 ? joinFee : 0;
-
-    // Court bookings (the only thing paid for at registration) → one
-    // transaction header + a detail line per session.
-    if (input.bookings && input.bookings.length > 0) {
-      const first = input.bookings[0];
-      const courtTotal = input.bookings.reduce((s, b) => s + b.price, 0);
-      // count free (quota-covered) sessions to burn on the member's quota
-      const quotaConsumed = input.bookings.filter((b) => b.price === 0).length;
-      await db.t_booking.create({
-        data: {
+    await db.$transaction(async (tx) => {
+      // 1. Membership FIRST (writes history; sets plan/quota/cycle on t_member).
+      let historyId: string | undefined;
+      if (planRow) {
+        const hist = await applyMembershipAction(tx, {
           companyId: session.companyId,
           memberId: member.id,
-          type: first.type,
-          status: first.status,
-          customer: first.customer,
-          totalPrice: courtTotal + joinFeeCharged,
+          planId: planRow.id,
+          action: "assign",
+          actor: { kind: "staff", userId: session.userId },
           joinFee: joinFeeCharged,
-          quotaConsumed,
-          note: joinFeeCharged > 0 ? `Termasuk join fee ${joinFeeCharged}` : null,
-          ...auditCreate(session.userId),
-          details: {
-            create: input.bookings.map((b) => ({
-              companyId: session.companyId,
-              courtId: b.courtId,
-              start: new Date(b.start),
-              end: new Date(b.end),
-              partySize: b.partySize,
-              basePrice: b.price,
-              price: b.price,
-              status: b.status,
-              note: b.note ?? null,
-              ...auditCreate(b.createdBy || session.userId),
-            })),
-          },
-        },
-      });
-      // burn membership quota consumed by free court sessions at registration
-      if (planId && quotaConsumed > 0) {
-        await db.t_member.update({
-          where: { id: member.id },
-          data: { quotaUsed: { increment: quotaConsumed }, ...auditUpdate(session.userId) },
+          method: joinFeeCharged > 0 ? "Cash" : undefined,
+          markJoinFeePaid: joinFeePaidNow,
         });
+        historyId = hist.historyId;
       }
-    } else if (joinFeeCharged > 0) {
-      // No court bookings, but join fee paid now → standalone fee transaction.
-      await db.t_booking.create({
-        data: {
+
+      // 2. Court bookings (pre-priced by the form) → one transaction header.
+      let bookingId: string | undefined;
+      let courtTotal = 0;
+      if (input.bookings && input.bookings.length > 0) {
+        const first = input.bookings[0];
+        courtTotal = input.bookings.reduce((s, b) => s + b.price, 0);
+        const quotaConsumed = input.bookings.filter((b) => b.price === 0).length;
+        const header = await tx.t_booking.create({
+          data: {
+            companyId: session.companyId,
+            memberId: member.id,
+            type: first.type,
+            status: first.status,
+            customer: first.customer,
+            totalPrice: courtTotal,
+            joinFee: 0, // join fee now lives in t_membership_history
+            quotaConsumed,
+            ...auditCreate(session.userId),
+            details: {
+              create: input.bookings.map((b) => ({
+                companyId: session.companyId,
+                courtId: b.courtId,
+                start: new Date(b.start),
+                end: new Date(b.end),
+                partySize: b.partySize,
+                basePrice: b.price,
+                price: b.price,
+                status: b.status,
+                note: b.note ?? null,
+                ...auditCreate(b.createdBy || session.userId),
+              })),
+            },
+          },
+        });
+        bookingId = header.id;
+        if (planRow && quotaConsumed > 0) {
+          await tx.t_member.update({
+            where: { id: member.id },
+            data: { quotaUsed: { increment: quotaConsumed }, ...auditUpdate(session.userId) },
+          });
+        }
+      }
+
+      // 3. One payment record for whatever was charged now; link it.
+      const payable = joinFeeCharged + courtTotal;
+      if (payable > 0) {
+        const pay = await recordPayment(tx, {
           companyId: session.companyId,
-          memberId: member.id,
-          type: "member",
-          status: "completed",
-          customer: input.name.trim(),
-          totalPrice: joinFeeCharged,
-          joinFee: joinFeeCharged,
-          note: "Join fee membership",
-          ...auditCreate(session.userId),
-        },
-      });
-    }
+          method: "Cash",
+          membershipAmount: joinFeeCharged,
+          courtAmount: courtTotal,
+          paidByType: "staff",
+          cashReceived: payable,
+          actor: { kind: "staff", userId: session.userId },
+        });
+        if (historyId && joinFeeCharged > 0) {
+          await tx.t_membership_history.update({
+            where: { id: historyId },
+            data: { paymentId: pay.id },
+          });
+        }
+        if (bookingId) {
+          await tx.t_booking.update({ where: { id: bookingId }, data: { paymentId: pay.id } });
+        }
+      }
+    });
 
     revalidatePath("/members");
     return { success: true, id: member.id, memberNo, username, tempPassword };

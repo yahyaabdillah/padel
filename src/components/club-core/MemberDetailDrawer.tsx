@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Drawer from "@/components/ui/drawer/Drawer";
 import { Avatar } from "@/components/ui/avatar/Avatar";
 import Button from "@/components/ui/button/Button";
@@ -8,6 +9,7 @@ import TextInput from "@/components/ui/input/TextInput";
 import UiSelect from "@/components/ui/select/Select";
 import { ModalDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast/ToastContext";
+import { useAccess } from "@/context/AccessContext";
 import ToneBadge from "./ToneBadge";
 import {
   type MemberRecord,
@@ -46,6 +48,9 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
   canDelete = true,
 }) => {
   const toast = useToast();
+  const router = useRouter();
+  const { can, isSuper } = useAccess();
+  const canManageMembership = isSuper || can("members.membership", "view");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -241,11 +246,22 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
           <div className="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-semibold text-[var(--text-heading)]">Membership</span>
-              {canUpdate && (
-                <Button variant="outline" size="sm" onClick={openPlanModal}>
-                  {member.planId ? "Ubah" : "Atur"}
-                </Button>
-              )}
+              <div className="flex items-center gap-2">
+                {canManageMembership && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => router.push(`/members/membership?member=${member.id}`)}
+                  >
+                    Kelola Membership
+                  </Button>
+                )}
+                {canUpdate && (
+                  <Button variant="outline" size="sm" onClick={openPlanModal}>
+                    {member.planId ? "Ubah" : "Atur"}
+                  </Button>
+                )}
+              </div>
             </div>
             {member.planId ? (
               <div className="space-y-2">

@@ -4,9 +4,10 @@
 //
 // Run: npm run db:reset-transactional
 //
-// Wiped (in FK-safe order): t_checkin → t_coaching_session → t_coaching_schedule →
-//                           t_booking_detail → t_booking → t_court_maintenance
-//                           → t_member
+// Wiped (in FK-safe order): t_checkin → t_membership_history →
+//                           t_coaching_session → t_coaching_schedule →
+//                           t_booking_detail → t_booking → t_payment →
+//                           t_court_maintenance → t_member
 // Kept: m_user, m_court, m_operating_hours, m_membership_plan, m_coach,
 //       m_coach_package (and the master DB)
 
@@ -21,6 +22,9 @@ async function main() {
   const checkin = await tenant.t_checkin.deleteMany({});
   console.log(`   t_checkin:           ${checkin.count} removed`);
 
+  const membershipHistory = await tenant.t_membership_history.deleteMany({});
+  console.log(`   t_membership_history:${membershipHistory.count} removed`);
+
   const coachingSession = await tenant.t_coaching_session.deleteMany({});
   console.log(`   t_coaching_session:  ${coachingSession.count} removed`);
 
@@ -32,6 +36,9 @@ async function main() {
 
   const booking = await tenant.t_booking.deleteMany({});
   console.log(`   t_booking:           ${booking.count} removed`);
+
+  const payment = await tenant.t_payment.deleteMany({});
+  console.log(`   t_payment:           ${payment.count} removed`);
 
   const maint = await tenant.t_court_maintenance.deleteMany({});
   console.log(`   t_court_maintenance: ${maint.count} removed`);

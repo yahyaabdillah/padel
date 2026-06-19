@@ -197,6 +197,15 @@ export type MyBookingRow = {
   /** number of court lines in this booking */
   lines: number;
   totalPrice: number;
+  /** per-session detail lines (for member-side cancel) */
+  sessions: {
+    detailId: string;
+    courtName: string | null;
+    start: string;
+    end: string;
+    status: string;
+    price: number;
+  }[];
 };
 
 export type MyBookingsData = {
@@ -241,6 +250,17 @@ export async function getMyBookingsAction(): Promise<MyBookingsData> {
       status: b.status,
       lines: lines.length,
       totalPrice: b.totalPrice,
+      sessions: lines
+        .slice()
+        .sort((a, c) => a.start.getTime() - c.start.getTime())
+        .map((l) => ({
+          detailId: l.id,
+          courtName: l.court?.name ?? null,
+          start: l.start.toISOString(),
+          end: l.end.toISOString(),
+          status: l.status,
+          price: l.price,
+        })),
     };
 
     const isClosed =

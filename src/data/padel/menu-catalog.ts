@@ -118,6 +118,18 @@ export const MENU_CATALOG: (MenuCatalogEntry & RoleMenuDefault)[] = [
     sortOrder: next(),
     grants: { owner: "*", staff: ["view", "create", "update", "export"] },
   },
+  {
+    key: "members.membership",
+    label: "Membership",
+    path: "/members/membership",
+    icon: "BadgeCheck",
+    parentKey: "members",
+    groupKey: "main",
+    section: "Club",
+    sortOrder: next(),
+    badge: "new",
+    grants: { owner: "*", staff: ["view", "create", "update"] },
+  },
 
   // ── Coaching (Club) ──
   {
@@ -334,7 +346,7 @@ export const MENU_CATALOG: (MenuCatalogEntry & RoleMenuDefault)[] = [
     groupKey: "main",
     section: "Member",
     sortOrder: next(),
-    grants: { member: ["view"] },
+    grants: { member: ["view", "cancel"] },
   },
   {
     key: "portal.checkin",
@@ -356,7 +368,7 @@ export const MENU_CATALOG: (MenuCatalogEntry & RoleMenuDefault)[] = [
     groupKey: "main",
     section: "Member",
     sortOrder: next(),
-    grants: { member: ["view"] },
+    grants: { member: ["view", "create"] },
   },
   {
     key: "portal.payments",

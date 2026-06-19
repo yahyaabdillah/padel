@@ -37,17 +37,33 @@ export type MeMembership = {
   resetAt: string | null;
 };
 
+/** Time grouping label for the hour axis (mirrors settings/hours groupings). */
+export type MeTimeGroup = {
+  id: string;
+  name: string;
+  startHour: number;
+  endHour: number;
+  color: string;
+  sortOrder: number;
+};
+
 export type MeBookData = {
   courts: MeCourt[];
   membership: MeMembership;
+  timeGroups: MeTimeGroup[];
 };
 
-export type CreateMyBookingInput = {
+/** One court session in a (possibly multi-session) member checkout. */
+export type BookSessionInput = {
   courtId: string;
   dateKey: string; // YYYY-MM-DD
   startHour: number; // 0–23 (booking step is hourly)
   durationHours: number; // 1 | 1.5 | 2
   partySize: number;
+};
+
+export type CreateMyBookingInput = {
+  sessions: BookSessionInput[];
   paymentMethod: MemberPaymentMethod;
 };
 
@@ -55,6 +71,39 @@ export type CreateMyBookingResult = {
   success: boolean;
   error?: string;
   id?: string;
+  paymentRef?: string;
   payable?: number;
-  coveredByQuota?: boolean;
+  coveredCount?: number;
+};
+
+/** Per-session pricing line returned by the preview. */
+export type PreviewLine = {
+  courtId: string;
+  courtName: string;
+  dateKey: string;
+  startHour: number;
+  durationHours: number;
+  label: string; // "14:00–15:30"
+  basePrice: number;
+  coveredByQuota: boolean;
+  discountPct: number;
+  payable: number;
+};
+
+export type PreviewMyBookingResult = {
+  success: boolean;
+  error?: string;
+  lines: PreviewLine[];
+  subtotal: number;
+  quotaSavings: number;
+  discountSavings: number;
+  totalSavings: number;
+  payable: number;
+  quotaRemaining: number;
+  quotaRemainingAfter: number;
+};
+
+export type CancelMyBookingResult = {
+  success: boolean;
+  error?: string;
 };

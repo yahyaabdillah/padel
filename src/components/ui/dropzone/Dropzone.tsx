@@ -126,7 +126,7 @@ const Dropzone: React.FC<DropzoneProps> = ({
       const accepted: DropzoneFile[] = [];
 
       for (const file of incoming) {
-        if (maxFiles && files.length + accepted.length >= maxFiles) {
+        if (maxFiles && filesRef.current.length + accepted.length >= maxFiles) {
           onReject?.(file, `Maksimal ${maxFiles} file`);
           continue;
         }
@@ -145,26 +145,27 @@ const Dropzone: React.FC<DropzoneProps> = ({
       }
 
       if (accepted.length === 0) return;
-      setFiles((prev) => {
-        const next = multiple ? [...prev, ...accepted] : accepted;
-        onFilesChange?.(next);
-        return next;
-      });
+      const next = multiple ? [...filesRef.current, ...accepted] : accepted;
+      filesRef.current = next;
+      setFiles(next);
+      // Notify the parent OUTSIDE any state updater (calling it inside the
+      // updater runs during render → "Cannot update a component while
+      // rendering a different component").
+      onFilesChange?.(next);
       accepted.forEach((f) => simulateUpload(f.id));
     },
-    [disabled, files.length, maxFiles, multiple, validate, onReject, onFilesChange, simulateUpload]
+    [disabled, maxFiles, multiple, validate, onReject, onFilesChange, simulateUpload]
   );
 
   const removeFile = useCallback(
     (id: string) => {
       setPreviewFile((current) => (current?.id === id ? null : current));
-      setFiles((prev) => {
-        const target = prev.find((f) => f.id === id);
-        if (target?.preview) URL.revokeObjectURL(target.preview);
-        const next = prev.filter((f) => f.id !== id);
-        onFilesChange?.(next);
-        return next;
-      });
+      const target = filesRef.current.find((f) => f.id === id);
+      if (target?.preview) URL.revokeObjectURL(target.preview);
+      const next = filesRef.current.filter((f) => f.id !== id);
+      filesRef.current = next;
+      setFiles(next);
+      onFilesChange?.(next);
     },
     [onFilesChange]
   );

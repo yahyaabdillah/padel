@@ -243,6 +243,7 @@ model m_membership_plan {
   isDeleted Int       @default(0)
 
   members t_member[]
+  membershipHistory t_membership_history[]
 
   @@index([companyId])
   @@index([active])
@@ -371,6 +372,7 @@ model t_member {
   plan     m_membership_plan? @relation(fields: [planId], references: [id])
   coachingSchedules t_coaching_schedule[]
   checkins t_checkin[]
+  membershipHistory t_membership_history[]
 
   @@unique([companyId, memberNo])
   @@unique([companyId, username])
@@ -398,6 +400,9 @@ model t_booking {
   joinFee       Int     @default(0)
   /// membership quota slots consumed by this transaction
   quotaConsumed Int     @default(0)
+  /// link to the checkout payment (new). The legacy joinFee field above is kept
+  /// for backward-compat but is NO LONGER the system of record for join fees.
+  paymentId     String? @db.Uuid
   note          String? @db.Text
 
   // ── audit + soft delete ──
@@ -412,10 +417,12 @@ model t_booking {
   member  t_member?          @relation(fields: [memberId], references: [id])
   details t_booking_detail[]
   checkins t_checkin[]
+  payment t_payment?         @relation(fields: [paymentId], references: [id])
 
   @@index([companyId])
   @@index([memberId])
   @@index([status])
+  @@index([paymentId])
   @@index([isDeleted])
 }
 
@@ -597,5 +604,98 @@ model t_checkin {
   @@index([bookingId])
   @@index([result])
   @@index([at])
+  @@index([isDeleted])
+}
+
+/// A payment for one checkout (record-only now; a future payment-gateway spec
+/// extends it without touching bookings/membership). Links the membership
+/// history entry and/or the booking transaction made in the same checkout via
+/// paymentRef. Transactional: wiped on app reset.
+model t_payment {
+  id          String  @id @default(uuid()) @db.Uuid
+  companyId   String  @db.VarChar(50)
+  /// stable per-checkout reference (e.g. PAY-2026-xxxx), unique per tenant
+  paymentRef  String  @db.VarChar(40)
+  /// Cash | QRIS | Transfer
+  method      String  @db.VarChar(20)
+  /// total charged = membershipAmount + courtAmount (IDR)
+  amount           Int @default(0)
+  membershipAmount Int @default(0)
+  courtAmount      Int @default(0)
+  /// paid (always now) | pending | failed | cancelled | refunded
+  status      String  @default("paid") @db.VarChar(20)
+  /// who paid: member | staff
+  paidByType  String  @db.VarChar(20)
+  /// cash handling at the desk (null for non-cash)
+  cashReceived Int?
+  cashChange   Int?
+  note         String? @db.Text
+
+  // ── future payment-gateway placeholders (nullable, unused now) ──
+  provider   String?   @db.VarChar(40)
+  externalId String?   @db.VarChar(120)
+  paidAt     DateTime? @db.Timestamp(0)
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  bookings  t_booking[]
+  histories t_membership_history[]
+
+  @@unique([companyId, paymentRef])
+  @@index([companyId])
+  @@index([status])
+  @@index([isDeleted])
+}
+
+/// Audit + financial log of membership actions (assign | extend | upgrade).
+/// Replaces recording the join fee on t_booking. Visible to staff (per member)
+/// and to the member (their own). Transactional: wiped on app reset.
+model t_membership_history {
+  id          String  @id @default(uuid()) @db.Uuid
+  companyId   String  @db.VarChar(50)
+  memberId    String  @db.Uuid
+  /// target plan of the action
+  planId      String  @db.Uuid
+  planName    String  @db.VarChar(100) // snapshot at action time
+  /// assign | extend | upgrade
+  action      String  @db.VarChar(20)
+  /// previous plan (set on upgrade), for the record
+  previousPlanId   String? @db.Uuid
+  previousPlanName String? @db.VarChar(100)
+  /// join fee charged for this action (IDR, snapshot)
+  joinFee     Int     @default(0)
+  /// Cash | QRIS | Transfer (null when joinFee = 0)
+  method      String? @db.VarChar(20)
+  /// link to the payment record (null when joinFee = 0)
+  paymentId   String? @db.Uuid
+  /// who performed it: staff | member
+  actorType   String  @db.VarChar(20)
+  /// cycleStart snapshot applied by this action
+  cycleStart  DateTime? @db.Timestamp(0)
+  note        String? @db.Text
+
+  // ── audit + soft delete ──
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  member  t_member          @relation(fields: [memberId], references: [id])
+  plan    m_membership_plan @relation(fields: [planId], references: [id])
+  payment t_payment?        @relation(fields: [paymentId], references: [id])
+
+  @@index([companyId])
+  @@index([memberId])
+  @@index([action])
   @@index([isDeleted])
 }

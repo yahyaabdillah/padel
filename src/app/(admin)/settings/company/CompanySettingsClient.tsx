@@ -34,7 +34,7 @@ const LOGO_ASPECT = 1; // 1:1
 
 export default function CompanySettingsClient() {
   const toast = useToast();
-  const { can, isSuper } = useAccess();
+  const { can, isSuper, refresh } = useAccess();
   const canUpdate = isSuper || can("settings.company", "update");
 
   const [form, setForm] = useState<CompanyProfile | null>(null);
@@ -43,6 +43,11 @@ export default function CompanySettingsClient() {
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const cropObjUrl = useRef<string | null>(null);
+  // mirror of `form` for use inside async callbacks without stale closures
+  const formRef = useRef<CompanyProfile | null>(null);
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,15 +80,42 @@ export default function CompanySettingsClient() {
     async (dataUrl: string) => {
       setUploadingLogo(true);
       const res = await uploadLogoAction(dataUrl);
-      setUploadingLogo(false);
       if (!res.success || !res.path) {
+        setUploadingLogo(false);
         toast.error(res.error || "Gagal mengunggah logo.", "Upload gagal");
         return;
       }
+
+      // reflect in the form immediately
       patch({ logo: res.path });
-      toast.success("Logo terunggah. Jangan lupa simpan.", "Logo siap");
+
+      // persist to DB right away (so the logo survives without waiting for a
+      // separate "Simpan"), then refresh sidebar/header branding.
+      const current = formRef.current;
+      if (current) {
+        const saved = await saveCompanyAction({
+          name: current.name,
+          address: current.address,
+          logo: res.path,
+          phone: current.phone,
+          email: current.email,
+          timezone: current.timezone,
+          scanStaffBooking: current.scanStaffBooking,
+          strictWindow: current.strictWindow,
+          checkinWindowMin: current.checkinWindowMin,
+        });
+        setUploadingLogo(false);
+        if (!saved.success) {
+          toast.error(saved.error || "Gagal menyimpan logo.", "Simpan gagal");
+          return;
+        }
+        toast.success("Logo tersimpan.", "Logo siap");
+        void refresh();
+      } else {
+        setUploadingLogo(false);
+      }
     },
-    [toast],
+    [toast, refresh],
   );
 
   const handleLogoUpload = useCallback((files: DropzoneFile[]) => {
@@ -137,6 +169,8 @@ export default function CompanySettingsClient() {
     }
     toast.success("Pengaturan perusahaan tersimpan.", "Tersimpan");
     void load();
+    // refresh the sidebar/header branding (name + logo) immediately
+    void refresh();
   };
 
   if (loading || !form) {
