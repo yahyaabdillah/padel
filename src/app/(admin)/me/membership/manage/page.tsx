@@ -153,7 +153,7 @@ export default function ManageMembershipPage() {
                   {p.includedCourtBookings > 0 && (
                     <li className="flex items-start gap-2 text-sm text-[var(--text-body)]">
                       <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-primary)]" />
-                      {p.includedCourtBookings}x booking gratis / {p.resetPeriodDays} hari
+                      {p.includedCourtBookings} sesi 60 menit gratis / {p.resetPeriodDays} hari
                     </li>
                   )}
                   {p.courtDiscountPct > 0 && (

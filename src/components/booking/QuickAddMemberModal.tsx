@@ -211,7 +211,7 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
           <div>
             <InputLabel
               label="Membership (opsional)"
-              tooltip="Plan menentukan join fee, kuota booking gratis, dan diskon. Pilih 'Tanpa plan' untuk member walk-in biasa."
+              tooltip="Plan menentukan join fee, kuota sesi 60 menit gratis, dan diskon. Pilih 'Tanpa plan' untuk member walk-in biasa."
             />
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               {/* no-plan option */}
@@ -266,7 +266,7 @@ const QuickAddMemberModal: React.FC<QuickAddMemberModalProps> = ({
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {p.includedCourtBookings > 0 && (
                         <Badge size="sm" color="info" variant="light">
-                          {p.includedCourtBookings}x gratis
+                          {p.includedCourtBookings} sesi gratis
                         </Badge>
                       )}
                       {p.courtDiscountPct > 0 && (

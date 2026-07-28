@@ -16,6 +16,57 @@ import OnboardingPrompt from "@/components/member/OnboardingPrompt";
 
 const outfit = Outfit({ subsets: ["latin"] });
 
+const browserExtensionHydrationGuard = `
+(() => {
+  const originalConsoleError = console.error.bind(console);
+
+  console.error = (...args) => {
+    const message = args.map((arg) => String(arg)).join("\\n");
+    const isExtensionHydrationWarning =
+      message.includes("hydrated but some attributes") &&
+      (message.includes("bis_") || message.includes("__processed_"));
+
+    if (isExtensionHydrationWarning) return;
+    originalConsoleError(...args);
+  };
+
+  const clean = (element) => {
+    if (!element || !element.attributes) return;
+
+    for (const attribute of Array.from(element.attributes)) {
+      if (
+        attribute.name.startsWith("bis_") ||
+        attribute.name.startsWith("__processed_")
+      ) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  };
+
+  const cleanTree = () => {
+    clean(document.documentElement);
+    clean(document.body);
+    document.querySelectorAll("[bis_skin_checked], [bis_register]").forEach(clean);
+
+    document.querySelectorAll("*").forEach((element) => {
+      for (const attribute of Array.from(element.attributes)) {
+        if (attribute.name.startsWith("__processed_")) {
+          element.removeAttribute(attribute.name);
+        }
+      }
+    });
+  };
+
+  cleanTree();
+
+  new MutationObserver(cleanTree).observe(document.documentElement, {
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
+})();
+`;
+
 export const metadata = {
   title: "PadelHub — Padel Club Management SaaS",
   description:
@@ -28,8 +79,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="bg-gray-50">
-      <body className={`${outfit.className} dark:bg-gray-900`}>
+    <html lang="en" className="bg-gray-50" suppressHydrationWarning>
+      <head>
+        <script
+          id="browser-extension-hydration-guard"
+          dangerouslySetInnerHTML={{
+            __html: browserExtensionHydrationGuard,
+          }}
+        />
+      </head>
+      <body
+        className={`${outfit.className} dark:bg-gray-900`}
+        suppressHydrationWarning
+      >
         <ThemeProvider>
           <RoleProvider>
             <OnboardingProvider>

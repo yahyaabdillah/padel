@@ -485,7 +485,10 @@ export default function BookingPayment({
             </div>
             <dl className="space-y-2.5 text-sm">
               <Row label="Member" value={member.name} />
-              <Row label="Jumlah sesi" value={`${sessions.length} booking`} />
+              <Row
+                label="Jumlah sesi"
+                value={`${sessions.length} sesi (60 menit/sesi)`}
+              />
               {plan && (
                 <Row
                   label="Sisa kuota"
@@ -504,7 +507,7 @@ export default function BookingPayment({
                   <span>
                     Hemat membership
                     {benefit.quotaCoveredCount > 0
-                      ? ` (${benefit.quotaCoveredCount}x kuota)`
+                      ? ` (${benefit.quotaCoveredCount} kuota sesi)`
                       : ""}
                   </span>
                   <span>−{formatIDR(benefit.totalSavings)}</span>

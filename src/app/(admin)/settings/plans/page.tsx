@@ -140,7 +140,7 @@ export default function MembershipPlansPage() {
   return (
     <PageScaffold
       title="Membership Plan"
-      subtitle="Atur benefit tiap plan: harga, kuota booking gratis, diskon, dan jatah coaching. Benefit langsung dipakai saat booking & registrasi member."
+      subtitle="Atur benefit tiap plan: harga, kuota sesi 60 menit gratis, diskon, dan jatah coaching. Benefit langsung dipakai saat booking & registrasi member."
       requireAny={["settings.view"]}
       actions={
         canCreate ? (
@@ -219,10 +219,10 @@ export default function MembershipPlansPage() {
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <BenefitChip
                   icon={<Ticket className="h-3.5 w-3.5" />}
-                  label="Kuota gratis"
+                  label="Sesi gratis"
                   value={
                     p.includedCourtBookings > 0
-                      ? `${p.includedCourtBookings}x`
+                      ? `${p.includedCourtBookings} jam`
                       : "—"
                   }
                 />
@@ -379,14 +379,14 @@ export default function MembershipPlansPage() {
               </h4>
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <TextInput
-                  label="Kuota booking lapangan"
-                  labelInfo="Jumlah booking lapangan GRATIS per siklus. Berlaku untuk semua lapangan & jam (peak termasuk)."
+                  label="Kuota sesi lapangan"
+                  labelInfo="Satu kuota berlaku untuk satu sesi lapangan selama 60 menit. Berlaku untuk semua lapangan dan jam, termasuk peak."
                   type="number"
                   value={String(editing.includedCourtBookings)}
                   onChange={(v) =>
                     setEditing({ ...editing, includedCourtBookings: Math.max(0, Number(v) || 0) })
                   }
-                  hint="0 = tanpa kuota gratis"
+                  hint="0 = tanpa sesi gratis"
                 />
                 <TextInput
                   label="Reset kuota tiap (hari)"

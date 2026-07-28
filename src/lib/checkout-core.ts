@@ -10,6 +10,7 @@
 
 import type { PrismaClient, Prisma } from "@prisma/tenant-client";
 import { calcMembershipBenefit } from "@/lib/membership-benefit";
+import { resolveMembershipQuotaCycle } from "@/lib/membership-quota";
 
 type Tx = Prisma.TransactionClient;
 
@@ -90,6 +91,7 @@ export interface ResolvedBenefit {
   quotaRemaining: number;
   joinFeeDue: number;
   resetPeriodDays: number;
+  shouldStartNewQuotaCycle: boolean;
 }
 
 /** Resolve a member's live plan benefit, rolling the cycle if elapsed. */
@@ -103,22 +105,33 @@ export async function resolveMemberBenefit(
     include: { plan: true },
   });
   if (!m || !m.plan || m.plan.isDeleted !== 0) {
-    return { plan: null, planName: null, quotaRemaining: 0, joinFeeDue: 0, resetPeriodDays: 0 };
+    return {
+      plan: null,
+      planName: null,
+      quotaRemaining: 0,
+      joinFeeDue: 0,
+      resetPeriodDays: 0,
+      shouldStartNewQuotaCycle: false,
+    };
   }
-  let used = m.quotaUsed;
-  if (m.plan.resetPeriodDays > 0 && m.cycleStart) {
-    const elapsed = Math.floor((Date.now() - m.cycleStart.getTime()) / 86_400_000);
-    if (elapsed >= m.plan.resetPeriodDays) used = 0;
-  }
+  const quotaCycle = resolveMembershipQuotaCycle({
+    quotaUsed: m.quotaUsed,
+    cycleStart: m.cycleStart,
+    resetPeriodDays: m.plan.resetPeriodDays,
+  });
   return {
     plan: {
       includedCourtBookings: m.plan.includedCourtBookings,
       courtDiscountPct: m.plan.courtDiscountPct,
     },
     planName: m.plan.name,
-    quotaRemaining: Math.max(0, m.plan.includedCourtBookings - used),
+    quotaRemaining: Math.max(
+      0,
+      m.plan.includedCourtBookings - quotaCycle.effectiveQuotaUsed,
+    ),
     joinFeeDue: m.joinFeePaid ? 0 : m.plan.joinFee,
     resetPeriodDays: m.plan.resetPeriodDays,
+    shouldStartNewQuotaCycle: quotaCycle.shouldStartNewCycle,
   };
 }
 
@@ -256,8 +269,6 @@ export async function recordPayment(
  *  Orchestrator
  * ════════════════════════════════════════════════════════ */
 
-const STORAGE_SLOT_MS = 30 * 60_000;
-
 /**
  * Run a combined checkout in ONE transaction:
  *   1. validate method for the actor
@@ -383,7 +394,15 @@ export async function runCheckout(
         if (quotaConsumed > 0) {
           await tx.t_member.update({
             where: { id: args.memberId },
-            data: { quotaUsed: { increment: quotaConsumed }, updatedBy: args.actor.userId },
+            data: {
+              quotaUsed: benefit.shouldStartNewQuotaCycle
+                ? quotaConsumed
+                : { increment: quotaConsumed },
+              ...(benefit.shouldStartNewQuotaCycle && {
+                cycleStart: new Date(),
+              }),
+              updatedBy: args.actor.userId,
+            },
           });
         }
       }
@@ -427,7 +446,7 @@ export async function runCheckout(
         historyId,
         fullyCoveredByQuota: fullyCovered,
       };
-    });
+    }, { isolationLevel: "Serializable" });
 
     return { success: true, ...out };
   } catch (err) {

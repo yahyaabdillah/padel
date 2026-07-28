@@ -218,7 +218,7 @@ model m_membership_plan {
   color                 String  @default("#6D5BFF") @db.VarChar(20)
   /// one-time join fee in IDR (0 = none)
   joinFee               Int     @default(0)
-  /// free court bookings included per cycle
+  /// free 60-minute court sessions included per cycle
   includedCourtBookings Int     @default(0)
   /// days before the quota cycle resets (0 = never)
   resetPeriodDays       Int     @default(30)
@@ -352,7 +352,7 @@ model t_member {
   planId       String?   @db.Uuid
   /// ISO date the current quota cycle started (for reset rollover)
   cycleStart   DateTime? @db.Timestamp(0)
-  /// court bookings consumed in the current cycle
+  /// 60-minute court sessions consumed in the current cycle
   quotaUsed    Int       @default(0)
   /// free coaching sessions consumed in the current cycle
   coachingUsed Int       @default(0)

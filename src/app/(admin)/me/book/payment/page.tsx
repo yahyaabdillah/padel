@@ -331,7 +331,9 @@ function PaymentInner() {
             <dl className="space-y-2.5 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-[var(--text-caption)]">Jumlah sesi</dt>
-                <dd className="text-right font-medium text-[var(--text-heading)]">{cart.length} booking</dd>
+                <dd className="text-right font-medium text-[var(--text-heading)]">
+                  {cart.length} sesi (60 menit/sesi)
+                </dd>
               </div>
               {m.planName && m.quotaTotal > 0 && (
                 <div className="flex items-center justify-between gap-3">

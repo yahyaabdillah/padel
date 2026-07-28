@@ -344,7 +344,7 @@ const MemberDetailDrawer: React.FC<MemberDetailDrawerProps> = ({
               label: p.name,
               desc:
                 p.includedCourtBookings > 0
-                  ? `${p.includedCourtBookings}x gratis · ${p.courtDiscountPct}% off`
+                  ? `${p.includedCourtBookings} sesi gratis · ${p.courtDiscountPct}% off`
                   : p.courtDiscountPct > 0
                     ? `${p.courtDiscountPct}% off`
                     : "Tanpa benefit booking",

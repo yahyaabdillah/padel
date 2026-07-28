@@ -379,7 +379,7 @@ export default function MemberRegister() {
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {p.includedCourtBookings > 0 && (
                               <Badge size="sm" color="info" variant="light">
-                                {p.includedCourtBookings}x court gratis
+                                {p.includedCourtBookings} sesi 60 menit gratis
                               </Badge>
                             )}
                             {p.courtDiscountPct > 0 && (

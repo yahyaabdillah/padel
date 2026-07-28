@@ -144,8 +144,8 @@ const MembershipDetailDrawer: React.FC<Props> = ({ memberId, isOpen, onClose, on
       label: p.name,
       desc:
         p.joinFee > 0
-          ? `${idr(p.joinFee)} · ${p.includedCourtBookings}x gratis · ${p.courtDiscountPct}% off`
-          : `Gratis · ${p.includedCourtBookings}x gratis · ${p.courtDiscountPct}% off`,
+          ? `${idr(p.joinFee)} · ${p.includedCourtBookings} sesi gratis · ${p.courtDiscountPct}% off`
+          : `Gratis · ${p.includedCourtBookings} sesi gratis · ${p.courtDiscountPct}% off`,
     }));
   }, [overview, action, status]);
 

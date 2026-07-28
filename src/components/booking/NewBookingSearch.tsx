@@ -1,295 +1,547 @@
 "use client";
 
-// PadelHub — "New Booking" flow, time-first.
-//   Step 1 (this page): pick a DATE + earliest START TIME, click Cari.
-//   Step 2 (this page): show every available 60-min START TIME (at/after the
-//           chosen time) across all active courts. Click a time → navigate to
-//           the court-selection page (/bookings/courts) for that date + time.
-
-import React, { useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
-import { Search, CalendarDays, Clock, ChevronRight } from "lucide-react";
+import {
+  CalendarDays,
+  Check,
+  ChevronRight,
+  Clock,
+  MapPin,
+  RefreshCw,
+} from "lucide-react";
 import Card from "@/components/ui/card/Card";
 import Button from "@/components/ui/button/Button";
 import DatePicker from "@/components/ui/datepicker/DatePicker";
-import TimePicker from "@/components/ui/datepicker/TimePicker";
 import EmptyState from "@/components/ui/feedback/EmptyState";
-import ToneBadge from "@/components/club-core/ToneBadge";
-import { useClubData } from "@/components/club-core/ClubDataContext";
-import { useOperatingHours } from "@/context/OperatingHoursContext";
+import UiSelect from "@/components/ui/select/Select";
+import { ModalDialog } from "@/components/ui/modal";
+import { useToast } from "@/components/ui/toast/ToastContext";
+import { formatIDR } from "@/components/club-core/format";
+import QuickAddMemberModal from "@/components/booking/QuickAddMemberModal";
 import {
-  courtAvailableSlots,
-  hourToSlot,
-  slotLabel,
-  occupiedSlotsFor,
-  type BlockingWindow,
-} from "@/data/padel/club/courts";
-import { dateKey } from "@/data/padel/club/bookings";
+  getBookingAvailabilityAction,
+  type AvailableBookingCourt,
+  type BookingAvailabilityResult,
+} from "@/app/(admin)/bookings/actions";
 import {
-  getTimeGroupsAction,
-  type TimeGroup,
-} from "@/app/(admin)/settings/hours/group-actions";
+  areSlotsConsecutive,
+  dateKeyInTimeZone,
+  groupSlotsByTimeGroups,
+  normalizeSelectedSlots,
+} from "@/lib/booking-flow";
+import { dateKey as toDateKey } from "@/data/padel/club/bookings";
+import type { TimeGroup } from "@/app/(admin)/settings/hours/group-actions";
 
-const todayKey = "2026-06-02";
-
-/** Sessions are fixed at 60 minutes. */
-const SESSION_MINUTES = 60;
-
-/** An available start time + how many courts are free at it. */
-interface TimeOption {
-  startSlot: number;
-  startLabel: string;
-  endLabel: string;
-  courtCount: number;
+interface MemberLite {
+  id: string;
+  name: string;
+  phone: string;
+  tier: string;
 }
 
-export default function NewBookingSearch() {
+const initialDateKey = dateKeyInTimeZone();
+
+interface NewBookingSearchProps {
+  initialAvailability?: BookingAvailabilityResult["data"];
+  initialMembers: MemberLite[];
+  initialTimeGroups: TimeGroup[];
+  initialError?: string;
+}
+
+export default function NewBookingSearch({
+  initialAvailability,
+  initialMembers,
+  initialTimeGroups,
+  initialError,
+}: NewBookingSearchProps) {
   const router = useRouter();
-  const { courts, bookings, maintenance, isReady } = useClubData();
-  const { isReady: hoursReady } = useOperatingHours();
-
-  const [date, setDate] = useState<Date>(
-    () => new Date(`${todayKey}T00:00:00`),
+  const toast = useToast();
+  const [date, setDate] = useState(
+    () => new Date(`${initialDateKey}T00:00:00`),
   );
-  /** earliest hour the customer wants to play ("HH:MM") */
-  const [startTime, setStartTime] = useState<string>("07:00");
+  const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
+  const [selectedCourtId, setSelectedCourtId] = useState<string | null>(null);
+  const [availability, setAvailability] =
+    useState<BookingAvailabilityResult["data"]>(initialAvailability);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [loadingCourts, setLoadingCourts] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(
+    initialError ?? null,
+  );
+  const [members, setMembers] = useState<MemberLite[]>(initialMembers);
+  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [memberModalOpen, setMemberModalOpen] = useState(false);
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [prefillName, setPrefillName] = useState("");
+  const availabilityRequest = useRef(0);
 
-  const [results, setResults] = useState<TimeOption[] | null>(null);
-  const [searchedMeta, setSearchedMeta] = useState<{
-    dateKey: string;
-    startTime: string;
-  } | null>(null);
-  const [timeGroups, setTimeGroups] = useState<TimeGroup[]>([]);
+  const selectedDateKey = toDateKey(date);
+
+  const loadAvailability = useCallback(
+    async (dateKey: string, slots: number[], kind: "slots" | "courts") => {
+      const requestId = ++availabilityRequest.current;
+      if (kind === "slots") setLoadingSlots(true);
+      else setLoadingCourts(true);
+      setRequestError(null);
+      try {
+        const result = await getBookingAvailabilityAction({
+          dateKey,
+          selectedSlots: slots,
+        });
+        if (requestId !== availabilityRequest.current) return;
+        if (!result.success || !result.data) {
+          setRequestError(
+            result.error?.message ??
+              "Gagal memuat ketersediaan lapangan. Silakan coba kembali.",
+          );
+          return;
+        }
+        setAvailability(result.data);
+        setSelectedCourtId((current) =>
+          current &&
+          !result.data!.courts.some((court) => court.id === current)
+            ? null
+            : current,
+        );
+      } catch {
+        if (requestId !== availabilityRequest.current) return;
+        setRequestError(
+          "Gagal memuat ketersediaan lapangan. Silakan coba kembali.",
+        );
+      } finally {
+        if (requestId === availabilityRequest.current) {
+          setLoadingSlots(false);
+          setLoadingCourts(false);
+        }
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    void getTimeGroupsAction()
-      .then(setTimeGroups)
-      .catch(() => setTimeGroups([]));
-  }, []);
+    if (selectedSlots.length === 0) return;
+    const timeout = window.setTimeout(() => {
+      void loadAvailability(selectedDateKey, selectedSlots, "courts");
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [selectedDateKey, selectedSlots, loadAvailability]);
 
-  const activeCourts = useMemo(
-    () => courts.filter((c) => c.status === "active"),
-    [courts],
+  const selectedCourt = availability?.courts.find(
+    (court) => court.id === selectedCourtId,
+  );
+  const durationHours = (availability?.durationMinutes ?? 0) / 60;
+  const memberOptions = useMemo(
+    () =>
+      members.map((member) => ({
+        value: member.id,
+        label: member.name,
+        desc: member.phone || "tanpa telepon",
+      })),
+    [members],
+  );
+  const groupedSlots = useMemo(
+    () =>
+      groupSlotsByTimeGroups(
+        availability?.slots ?? [],
+        initialTimeGroups,
+      ),
+    [availability?.slots, initialTimeGroups],
   );
 
-  /** start-time → storage slot index (0–47) */
-  const timeToSlot = (t: string): number => {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(t);
-    if (!m) return 0;
-    return hourToSlot(Number(m[1])) + (Number(m[2]) >= 30 ? 1 : 0);
+  const changeDate = (value: Date) => {
+    const nextKey = toDateKey(value);
+    setDate(value);
+    setSelectedSlots([]);
+    setSelectedCourtId(null);
+    setAvailability(undefined);
+    void loadAvailability(nextKey, [], "slots");
   };
 
-  const runSearch = () => {
-    const key = dateKey(date);
-    const day = date.getDay();
-    const fromSlot = timeToSlot(startTime);
-
-    // Count, per start slot, how many active courts have it available.
-    const blockers: BlockingWindow[] = [
-      ...bookings
-        .filter((b) => b.status !== "cancelled")
-        .map((b) => ({ courtId: b.courtId, start: b.start, end: b.end })),
-      ...maintenance.map((m) => ({ courtId: m.courtId, start: m.start, end: m.end })),
-    ];
-    const countBySlot = new Map<number, number>();
-    activeCourts.forEach((court) => {
-      const occupied = occupiedSlotsFor(court.id, key, blockers);
-
-      courtAvailableSlots(court, day, SESSION_MINUTES, occupied, SESSION_MINUTES)
-        .filter((s) => s.startSlot >= fromSlot)
-        .forEach((s) => {
-          countBySlot.set(s.startSlot, (countBySlot.get(s.startSlot) ?? 0) + 1);
-        });
-    });
-
-    const times: TimeOption[] = Array.from(countBySlot.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([startSlot, courtCount]) => ({
-        startSlot,
-        startLabel: slotLabel(startSlot),
-        endLabel: slotLabel(startSlot + SESSION_MINUTES / 30),
-        courtCount,
-      }));
-
-    setSearchedMeta({ dateKey: key, startTime });
-    setResults(times);
+  const toggleSlot = (startSlot: number) => {
+    const selected = selectedSlots.includes(startSlot);
+    const next = normalizeSelectedSlots(
+      selected
+        ? selectedSlots.filter((slot) => slot !== startSlot)
+        : [...selectedSlots, startSlot],
+    );
+    if (next.length > 1 && !areSlotsConsecutive(next)) {
+      toast.warning(
+        "Pilih slot yang menempel pada waktu yang sudah dipilih.",
+        "Slot harus berurutan",
+      );
+      return;
+    }
+    setSelectedCourtId(null);
+    setSelectedSlots(next);
   };
 
-  const goToCourts = (startSlot: number) => {
-    if (!searchedMeta) return;
+  const openConfirmation = (court: AvailableBookingCourt) => {
+    setSelectedCourtId(court.id);
+    setSelectedMemberId("");
+    setMemberModalOpen(true);
+  };
+
+  const continueToPayment = () => {
+    if (!selectedCourt || !selectedMemberId || selectedSlots.length === 0) return;
     const params = new URLSearchParams({
-      date: searchedMeta.dateKey,
-      slot: String(startSlot),
+      court: selectedCourt.id,
+      date: selectedDateKey,
+      slots: selectedSlots.join(","),
+      member: selectedMemberId,
     });
-    router.push(`/bookings/courts?${params.toString()}`);
+    router.push(`/bookings/payment?${params.toString()}`);
   };
 
-  /** Bucket the available time options into the configured time groups. A slot
-   * belongs to a group if its START hour is within [startHour, endHour). Any
-   * slot not covered by a group falls into "Lainnya". Empty groups are hidden. */
-  const groupedResults = useMemo(() => {
-    if (!results) return [];
-    const startHourOf = (startSlot: number) => Math.floor((startSlot * 30) / 60);
-
-    const buckets: { key: string; name: string; color: string; items: TimeOption[] }[] = [];
-    const sortedGroups = [...timeGroups].sort(
-      (a, b) => a.sortOrder - b.sortOrder || a.startHour - b.startHour,
-    );
-    for (const g of sortedGroups) {
-      buckets.push({ key: g.id, name: g.name, color: g.color, items: [] });
-    }
-    const other: TimeOption[] = [];
-
-    for (const t of results) {
-      const h = startHourOf(t.startSlot);
-      const g = sortedGroups.find((grp) => h >= grp.startHour && h < grp.endHour);
-      if (g) {
-        const bucket = buckets.find((b) => b.key === g.id)!;
-        bucket.items.push(t);
-      } else {
-        other.push(t);
-      }
-    }
-
-    const out = buckets.filter((b) => b.items.length > 0);
-    if (other.length > 0) {
-      out.push({ key: "__other", name: "Lainnya", color: "#94A3B8", items: other });
-    }
-    return out;
-  }, [results, timeGroups]);
-
-  if (!isReady || !hoursReady) {
-    return (
-      <Card padding="lg">
-        <div className="space-y-4">
-          <div className="h-10 w-full animate-pulse rounded-lg bg-[var(--surface-muted)]" />
-          <div className="h-40 w-full animate-pulse rounded-xl bg-[var(--surface-muted)]" />
-        </div>
-      </Card>
-    );
-  }
+  const resetTime = () => {
+    setSelectedSlots([]);
+    setSelectedCourtId(null);
+    void loadAvailability(selectedDateKey, [], "slots");
+  };
 
   return (
     <div className="space-y-6">
-      {/* ── Step 1: Search form ── */}
       <Card padding="lg">
         <div className="mb-5 flex items-center gap-2">
           <CalendarDays className="h-5 w-5 text-[var(--color-primary)]" />
-          <h3 className="text-lg font-semibold text-[var(--text-heading)]">
-            Mau booking kapan?
-          </h3>
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text-heading)]">
+              Pilih tanggal
+            </h2>
+            <p className="text-xs text-[var(--text-caption)]">
+              Slot yang sudah lewat otomatis tidak dapat dipilih.
+            </p>
+          </div>
         </div>
-
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+        <div className="max-w-sm">
           <DatePicker
             label="Tanggal main"
-            labelInfo="Tanggal bermain. Tidak bisa memilih tanggal di masa lalu."
             mode="single"
             value={date}
-            minDate={new Date(`${todayKey}T00:00:00`)}
-            onChange={(v) => {
-              if (v instanceof Date) {
-                setDate(v);
-                setResults(null);
-              }
+            minDate={new Date(`${initialDateKey}T00:00:00`)}
+            onChange={(value) => {
+              if (value instanceof Date) changeDate(value);
             }}
           />
-
-          <TimePicker
-            label="Mulai dari jam"
-            value={startTime}
-            minuteStep={SESSION_MINUTES}
-            placeholder="Pilih jam mulai"
-            onChange={(v) => {
-              setStartTime(v || "07:00");
-              setResults(null);
-            }}
-          />
-
-          <Button
-            variant="primary"
-            sheen
-            glow
-            startIcon={<Search className="h-4 w-4" />}
-            onClick={runSearch}
-            className="h-11"
-          >
-            Cari
-          </Button>
         </div>
       </Card>
 
-      {/* ── Step 2: available times — click a time to pick a court ── */}
-      {results !== null && (
-        <Card padding="lg">
-          <div className="mb-4">
-            <h3 className="text-base font-semibold text-[var(--text-heading)]">
-              Jam tersedia
-            </h3>
-            {searchedMeta && (
-              <p className="mt-0.5 text-xs text-[var(--text-caption)]">
-                {searchedMeta.dateKey} · mulai {searchedMeta.startTime} ·{" "}
-                {results.length} pilihan jam · sesi {SESSION_MINUTES} menit
+      <section className="space-y-5">
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-[var(--color-primary)]" />
+            <div>
+              <h2 className="text-base font-semibold text-[var(--text-heading)]">
+                Pilih waktu
+              </h2>
+              <p className="text-xs text-[var(--text-caption)]">
+                Pilih satu atau beberapa slot 60 menit yang berurutan.
               </p>
-            )}
+            </div>
+          </div>
+          {selectedSlots.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={resetTime}>
+              Reset
+            </Button>
+          )}
+        </div>
+
+        {loadingSlots ? (
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 lg:grid-cols-8">
+            {Array.from({ length: 12 }, (_, index) => (
+              <div
+                key={index}
+                className="h-10 animate-pulse rounded-lg bg-[var(--surface-muted)]"
+              />
+            ))}
+          </div>
+        ) : requestError && !availability ? (
+          <EmptyState
+            title="Jadwal gagal dimuat"
+            description={requestError}
+            action={
+              <Button
+                variant="outline"
+                startIcon={<RefreshCw className="h-4 w-4" />}
+                onClick={() =>
+                  void loadAvailability(selectedDateKey, [], "slots")
+                }
+              >
+                Coba lagi
+              </Button>
+            }
+          />
+        ) : availability?.slots.length === 0 ? (
+          <EmptyState
+            title="Tidak ada slot waktu"
+            description="Tidak ada slot waktu yang tersedia pada tanggal ini."
+          />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(3,max-content)]">
+            {groupedSlots.map((group) => (
+              <section
+                key={group.id}
+                className="min-w-0 rounded-lg border border-[var(--border-default)] bg-[var(--surface-card)] p-3 lg:w-fit"
+              >
+                <div className="mb-3 flex items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: group.color }}
+                  />
+                  <h3 className="text-sm font-semibold text-[var(--text-heading)]">
+                    {group.name}
+                  </h3>
+                  <span className="text-xs text-[var(--text-muted)]">
+                    {group.slots.length} slot
+                  </span>
+                </div>
+                <div className="grid grid-cols-[repeat(2,minmax(0,7rem))] justify-start gap-1.5">
+                  {group.slots.map((slot) => {
+                    const active = selectedSlots.includes(slot.startSlot);
+                    const disabled = !slot.available || slot.past;
+                    return (
+                      <button
+                        key={slot.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => toggleSlot(slot.startSlot)}
+                        aria-label={`${slot.startTime}-${slot.endTime}, ${
+                          slot.past
+                            ? "sudah lewat"
+                            : slot.available
+                              ? `${slot.courtCount} lapangan tersedia`
+                              : "penuh"
+                        }`}
+                        className={[
+                          "relative flex h-11 w-full flex-col items-center justify-center rounded-lg border px-2 text-xs transition-colors",
+                          active
+                            ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
+                            : disabled
+                              ? "cursor-not-allowed border-transparent bg-[var(--surface-muted)] text-[var(--text-muted)] opacity-60"
+                              : "border-[var(--border-default)] bg-[var(--surface-card)] text-[var(--text-heading)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-light)]",
+                        ].join(" ")}
+                      >
+                        <span className="truncate font-semibold leading-none">
+                          {slot.startTime}
+                        </span>
+                        <span
+                          className={[
+                            "mt-0.5 truncate text-[10px] leading-none",
+                            active
+                              ? "text-white/80"
+                              : "text-[var(--text-caption)]",
+                          ].join(" ")}
+                        >
+                          {slot.past
+                            ? "Lewat"
+                            : slot.available
+                              ? `${slot.courtCount} lap.`
+                              : "Penuh"}
+                        </span>
+                        {active && (
+                          <Check className="absolute right-1.5 top-1.5 h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+
+        {selectedSlots.length > 0 && availability?.selectedStartTime && (
+          <div className="mt-5 grid grid-cols-2 gap-4 border-t border-[var(--border-light)] pt-4 sm:max-w-md">
+            <div>
+              <p className="text-xs text-[var(--text-caption)]">Waktu dipilih</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">
+                {availability.selectedStartTime}-{availability.selectedEndTime}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-caption)]">Durasi</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">
+                {durationHours} jam
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {selectedSlots.length > 0 && (
+        <Card padding="lg">
+          <div className="mb-5 flex items-center gap-2">
+            <MapPin className="h-5 w-5 text-[var(--color-primary)]" />
+            <div>
+              <h2 className="text-base font-semibold text-[var(--text-heading)]">
+                Pilih lapangan
+              </h2>
+              <p className="text-xs text-[var(--text-caption)]">
+                Hanya lapangan yang kosong selama seluruh durasi ditampilkan.
+              </p>
+            </div>
           </div>
 
-          {results.length === 0 ? (
-            <EmptyState
-              title="Tidak ada jam tersedia"
-              description="Coba ubah tanggal atau jam mulai untuk menemukan slot yang kosong."
-            />
-          ) : (
-            <div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-start">
-              {groupedResults.map((group) => (
+          {loadingCourts ? (
+            <div className="space-y-3">
+              <p className="text-sm text-[var(--text-caption)]">
+                Sedang mencari lapangan yang tersedia...
+              </p>
+              {Array.from({ length: 3 }, (_, index) => (
                 <div
-                  key={group.key}
-                  className="w-full lg:w-[260px] lg:flex-none rounded-2xl border border-[var(--border-default)] bg-[var(--surface-muted)]/40 p-3"
-                >
-                  <div className="mb-3 flex items-center gap-2 px-1">
-                    <span
-                      className="h-3 w-3 shrink-0 rounded-full"
-                      style={{ background: group.color }}
-                    />
-                    <h4 className="text-sm font-semibold text-[var(--text-heading)]">
-                      {group.name}
-                    </h4>
-                    <span className="ml-auto text-xs text-[var(--text-muted)]">
-                      {group.items.length} jam
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
-                    {group.items.map((t) => (
-                      <button
-                        key={t.startSlot}
-                        type="button"
-                        onClick={() => goToCourts(t.startSlot)}
-                        className="flex items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-3 text-left transition-all hover:border-[var(--color-primary)] hover:ring-1 hover:ring-[var(--color-primary)]"
-                      >
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary-light)] text-[var(--color-primary)]">
-                          <Clock className="h-4.5 w-4.5" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-[var(--text-heading)]">
-                            {t.startLabel}–{t.endLabel}
-                          </p>
-                          <p className="truncate text-xs text-[var(--text-caption)]">
-                            {t.courtCount} lapangan
-                          </p>
-                        </div>
-                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                          <ToneBadge tone="success">{t.courtCount}</ToneBadge>
-                          <ChevronRight className="h-4 w-4 text-[var(--text-muted)]" />
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                  key={index}
+                  className="h-20 animate-pulse rounded-lg bg-[var(--surface-muted)]"
+                />
               ))}
             </div>
-          )}
+          ) : requestError ? (
+            <EmptyState
+              title="Ketersediaan gagal dimuat"
+              description={requestError}
+              action={
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    void loadAvailability(
+                      selectedDateKey,
+                      selectedSlots,
+                      "courts",
+                    )
+                  }
+                >
+                  Coba lagi
+                </Button>
+              }
+            />
+          ) : availability?.courts.length === 0 ? (
+            <EmptyState
+              title="Tidak ada lapangan yang tersedia"
+              description="Tidak ada lapangan yang tersedia untuk seluruh waktu yang dipilih. Silakan pilih waktu lain."
+              action={
+                <Button variant="outline" onClick={resetTime}>
+                  Ubah pilihan waktu
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              {availability?.courts.map((court) => (
+                <button
+                  key={court.id}
+                  type="button"
+                  onClick={() => openConfirmation(court)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-card)] p-4 text-left transition-colors hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-light)]"
+                >
+                  <span
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+                    style={{ backgroundColor: court.color }}
+                  >
+                    {court.name.slice(0, 2).toUpperCase()}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-[var(--text-heading)]">
+                      {court.name}
+                    </p>
+                    <p className="truncate text-xs text-[var(--text-caption)]">
+                      {court.environment} · {court.format} ·{" "}
+                      {formatIDR(court.pricePerHour, true)}/jam
+                    </p>
+                  </div>
+                  <span className="ml-auto flex shrink-0 items-center gap-2">
+                    <span className="text-sm font-bold text-[var(--text-heading)]">
+                      {formatIDR(court.price)}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-[var(--text-muted)]" />
+                  </span>
+                </button>
+              ))}
+          </div>
+        )}
         </Card>
       )}
+
+      <ModalDialog
+        isOpen={memberModalOpen}
+        onClose={() => setMemberModalOpen(false)}
+        title="Konfirmasi booking"
+        description="Pilih pelanggan sebelum melanjutkan ke pembayaran."
+        footer={
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setMemberModalOpen(false)}>
+              Batal
+            </Button>
+            <Button
+              variant="primary"
+              sheen
+              disabled={!selectedMemberId || !selectedCourt}
+              endIcon={<ChevronRight className="h-4 w-4" />}
+              onClick={continueToPayment}
+            >
+              Lanjut pembayaran
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-4 rounded-lg bg-[var(--surface-muted)] p-4">
+            <div>
+              <p className="text-xs text-[var(--text-caption)]">Tanggal</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">
+                {selectedDateKey}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-caption)]">Waktu</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">
+                {availability?.selectedStartTime}-{availability?.selectedEndTime}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-caption)]">Lapangan</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">
+                {selectedCourt?.name}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-caption)]">Subtotal</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">
+                {formatIDR(selectedCourt?.price ?? 0)}
+              </p>
+            </div>
+          </div>
+          <UiSelect
+            label="Pelanggan"
+            options={memberOptions}
+            value={selectedMemberId}
+            searchable
+            addable
+            addLabelPrefix="Register"
+            placeholder="Cari nama atau nomor telepon"
+            onChange={(value) => setSelectedMemberId(String(value))}
+            onAddClick={(query) => {
+              setPrefillName(query);
+              setAddMemberOpen(true);
+            }}
+          />
+        </div>
+      </ModalDialog>
+
+      <QuickAddMemberModal
+        isOpen={addMemberOpen}
+        onClose={() => setAddMemberOpen(false)}
+        initialName={prefillName}
+        onCreated={(member) => {
+          setMembers((current) => [member, ...current]);
+          setSelectedMemberId(member.id);
+          setAddMemberOpen(false);
+        }}
+      />
     </div>
   );
 }

@@ -420,14 +420,15 @@ export async function cancelMyBookingAction(
     return { success: false, error: "Tidak bisa membatalkan sesi yang sudah lewat atau berjalan." };
   }
 
-  const wasQuotaCovered = detail.rateNote === "free (quota)" || detail.price === 0;
+  const wasQuotaCovered = detail.rateNote === "free (quota)";
 
   try {
     await db.$transaction(async (tx) => {
-      await tx.t_booking_detail.update({
-        where: { id: detail.id },
+      const cancelled = await tx.t_booking_detail.updateMany({
+        where: { id: detail.id, status: { not: "cancelled" } },
         data: { status: "cancelled", ...auditUpdate(session.userId) },
       });
+      if (cancelled.count !== 1) throw new Error("ALREADY_CANCELLED");
 
       // If all sibling lines are now cancelled, cancel the header too.
       const siblings = await tx.t_booking_detail.findMany({
@@ -446,16 +447,30 @@ export async function cancelMyBookingAction(
 
       // Restore quota (−1, floor 0) when this session was quota-covered.
       if (wasQuotaCovered && detail.booking!.memberId) {
-        const m = await tx.t_member.findUnique({
-          where: { id: detail.booking!.memberId },
-          select: { quotaUsed: true },
+        await tx.t_member.updateMany({
+          where: {
+            id: detail.booking!.memberId,
+            companyId: session.companyId,
+            quotaUsed: { gt: 0 },
+            ...NOT_DELETED,
+          },
+          data: {
+            quotaUsed: { decrement: 1 },
+            ...auditUpdate(session.userId),
+          },
         });
-        if (m && m.quotaUsed > 0) {
-          await tx.t_member.update({
-            where: { id: detail.booking!.memberId },
-            data: { quotaUsed: { decrement: 1 }, ...auditUpdate(session.userId) },
-          });
-        }
+        await tx.t_booking.updateMany({
+          where: {
+            id: detail.bookingId,
+            companyId: session.companyId,
+            quotaConsumed: { gt: 0 },
+            ...NOT_DELETED,
+          },
+          data: {
+            quotaConsumed: { decrement: 1 },
+            ...auditUpdate(session.userId),
+          },
+        });
       }
     });
 
