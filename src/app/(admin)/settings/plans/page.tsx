@@ -1,7 +1,7 @@
 "use client";
 
 // Master ▸ Membership Plan — CRUD for membership plans (benefits + court-booking
-// quota). Owner-configurable. Persisted via MembershipContext (localStorage).
+// quota). Owner-configurable and persisted through the tenant database actions.
 // Benefits set here are consumed by the shared calcMembershipBenefit() helper
 // across booking / registration / payment.
 

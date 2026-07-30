@@ -7,6 +7,7 @@ import type {
   PaymentRecord,
   PaymentStatus,
 } from "@/data/padel/member/payments";
+import { paymentHistoryCategory } from "@/lib/payment-history";
 
 const paymentMethod = (method: string): PaymentMethod =>
   method === "Cash" || method === "QRIS" || method === "Transfer"
@@ -32,6 +33,7 @@ export async function getMyPaymentsAction(): Promise<PaymentRecord[]> {
       companyId: session.companyId,
       isDeleted: 0,
       OR: [
+        { memberId: session.id },
         { bookings: { some: { memberId: session.id } } },
         { histories: { some: { memberId: session.id } } },
       ],
@@ -51,6 +53,18 @@ export async function getMyPaymentsAction(): Promise<PaymentRecord[]> {
         where: { memberId: session.id },
         select: { planName: true, joinFee: true },
       },
+      refunds: {
+        where: { isDeleted: 0, status: "refunded" },
+        select: { amount: true },
+      },
+      posSale: {
+        include: {
+          items: {
+            where: { isDeleted: 0 },
+            select: { name: true, quantity: true, unitPrice: true },
+          },
+        },
+      },
     },
     take: 200,
   });
@@ -68,21 +82,33 @@ export async function getMyPaymentsAction(): Promise<PaymentRecord[]> {
       qty: 1,
       price: history.joinFee,
     }));
-    const category: PaymentRecord["category"] =
-      membershipItems.length > 0 && bookingItems.length === 0
-        ? "Membership"
-        : "Booking";
+    const posItems = payment.posSale?.items.map((item) => ({
+      label: item.name,
+      qty: item.quantity,
+      price: item.unitPrice,
+    })) ?? [];
+    const category = paymentHistoryCategory(payment);
+    const refundedAmount = payment.refunds.reduce((sum, refund) => sum + refund.amount, 0);
     return {
       id: payment.id,
       invoiceNo: payment.paymentRef,
       description:
-        category === "Membership" ? "Membership" : "Court booking",
+        category === "Pro Shop"
+          ? payment.posSale?.receiptNo ?? "Pro Shop"
+          : category === "Membership"
+            ? "Membership"
+            : category === "Booking & Membership"
+              ? "Court booking & membership"
+              : "Court booking",
       category,
       date: payment.createdAt.toISOString(),
       amount: payment.amount,
       method: paymentMethod(payment.method),
-      status: paymentStatus(payment.status),
-      items: [...membershipItems, ...bookingItems],
+      status: refundedAmount >= payment.amount && payment.amount > 0
+        ? "refunded"
+        : paymentStatus(payment.status),
+      refundedAmount,
+      items: [...membershipItems, ...bookingItems, ...posItems],
     };
   });
 }

@@ -1,6 +1,5 @@
-// PadelHub — membership plans (benefits + court-booking quota) — dummy, no DB.
-// A single source of truth for what a membership tier includes. Editable via
-// Master ▸ Membership Plan, persisted to localStorage by MembershipContext.
+// Legacy display metadata for membership benefits. The operational source of
+// truth is m_membership_plan in the tenant database.
 //
 // Quota model: a plan can bundle `includedCourtBookings` free court bookings per
 // cycle. The cycle resets every `resetPeriodDays` days. While quota remains, a

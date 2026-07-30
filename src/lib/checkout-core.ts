@@ -252,6 +252,7 @@ export async function applyMembershipAction(
 
 export interface RecordPaymentArgs {
   companyId: string;
+  memberId?: string;
   method: PayMethod;
   membershipAmount: number;
   courtAmount: number;
@@ -274,6 +275,7 @@ export async function recordPayment(
   const row = await tx.t_payment.create({
     data: {
       companyId: args.companyId,
+      memberId: args.memberId ?? null,
       paymentRef,
       method: args.method,
       amount: total,
@@ -537,6 +539,7 @@ export async function runCheckout(
       // 5. one payment record, link it
       const pay = await recordPayment(tx, {
         companyId: args.companyId,
+        memberId: args.memberId,
         method: args.method,
         membershipAmount,
         courtAmount,

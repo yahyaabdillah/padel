@@ -7,12 +7,7 @@ import { RoleProvider } from "@/context/RoleContext";
 import { AccessProvider } from "@/context/AccessContext";
 import { OperatingHoursProvider } from "@/context/OperatingHoursContext";
 import { NotificationProvider } from "@/context/NotificationContext";
-import { PromoProvider } from "@/context/PromoContext";
-import { MembershipProvider } from "@/context/MembershipContext";
-import { FormBuilderProvider } from "@/context/FormBuilderContext";
-import { OnboardingProvider } from "@/context/OnboardingContext";
 import { ToastProvider } from "@/components/ui/toast/ToastContext";
-import OnboardingPrompt from "@/components/member/OnboardingPrompt";
 
 const outfit = Outfit({ subsets: ["latin"] });
 
@@ -94,26 +89,15 @@ export default function RootLayout({
       >
         <ThemeProvider>
           <RoleProvider>
-            <OnboardingProvider>
-              <AccessProvider>
-                <OperatingHoursProvider>
-                  <NotificationProvider>
-                    <PromoProvider>
-                      <MembershipProvider>
-                        <FormBuilderProvider>
-                          <ToastProvider>
-                            <SidebarProvider>
-                              {children}
-                              <OnboardingPrompt />
-                            </SidebarProvider>
-                          </ToastProvider>
-                        </FormBuilderProvider>
-                      </MembershipProvider>
-                    </PromoProvider>
-                  </NotificationProvider>
-                </OperatingHoursProvider>
-              </AccessProvider>
-            </OnboardingProvider>
+            <AccessProvider>
+              <OperatingHoursProvider>
+                <NotificationProvider>
+                  <ToastProvider>
+                    <SidebarProvider>{children}</SidebarProvider>
+                  </ToastProvider>
+                </NotificationProvider>
+              </OperatingHoursProvider>
+            </AccessProvider>
           </RoleProvider>
         </ThemeProvider>
       </body>

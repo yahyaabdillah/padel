@@ -246,6 +246,7 @@ export async function assignMemberPlanAction(
       if (joinFee > 0) {
         const pay = await recordPayment(tx, {
           companyId: session.companyId,
+          memberId: member.id,
           method: "Cash",
           membershipAmount: joinFee,
           courtAmount: 0,
@@ -733,6 +734,7 @@ export async function registerMemberAction(
       if (payable > 0) {
         const pay = await recordPayment(tx, {
           companyId: session.companyId,
+          memberId: member.id,
           method: "Cash",
           membershipAmount: joinFeeCharged,
           courtAmount: courtTotal,

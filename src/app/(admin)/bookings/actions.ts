@@ -579,6 +579,7 @@ export async function createBookingsAction(
           if (benefit.grandTotal > 0) {
             const pay = await recordPayment(tx, {
               companyId: session.companyId,
+              memberId: member?.id,
               method,
               membershipAmount: joinFee,
               courtAmount: benefit.payable,

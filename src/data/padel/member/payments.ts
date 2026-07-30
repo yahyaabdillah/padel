@@ -14,11 +14,12 @@ export interface PaymentRecord {
   id: string;
   invoiceNo: string;
   description: string;
-  category: "Booking" | "Membership" | "Open Play" | "Pro Shop" | "Top-up" | "Coaching";
+  category: "Booking" | "Membership" | "Booking & Membership" | "Open Play" | "Pro Shop" | "Top-up" | "Coaching";
   date: string; // ISO
   amount: number; // IDR
   method: PaymentMethod;
   status: PaymentStatus;
+  refundedAmount?: number;
   items: { label: string; qty: number; price: number }[];
 }
 

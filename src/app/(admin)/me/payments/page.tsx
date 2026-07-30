@@ -19,7 +19,7 @@ import {
 } from "@/data/padel/member";
 import { getMyPaymentsAction } from "./actions";
 
-const categories = ["All", "Booking", "Open Play", "Membership", "Pro Shop", "Top-up", "Coaching"];
+const categories = ["All", "Booking", "Membership", "Booking & Membership", "Pro Shop"];
 
 export default function MemberPaymentsPage() {
   const toast = useToast();
@@ -178,6 +178,9 @@ export default function MemberPaymentsPage() {
               <p className="font-mono">{receipt.invoiceNo}</p>
               <p>{prettyDate(receipt.date)} · {receipt.method}</p>
               <p>Billed to {currentUser.name} · {currentUser.email}</p>
+              {!!receipt.refundedAmount && (
+                <p className="mt-1 text-blue-600">Refunded: {idr(receipt.refundedAmount)}</p>
+              )}
             </div>
             <table className="w-full text-sm">
               <thead>

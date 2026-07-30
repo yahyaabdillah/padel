@@ -59,7 +59,6 @@ export const permissionCatalog: PermissionDef[] = [
   { key: "billing.view", label: "View billing & invoices", group: "Platform" },
   { key: "access.manage", label: "Manage RBAC / access control", group: "Platform" },
   { key: "menu.manage", label: "Manage menu builder", group: "Platform" },
-  { key: "form.manage", label: "Manage form builder", group: "Platform" },
   { key: "flags.manage", label: "Manage feature flags", group: "Platform" },
   // Club — dashboard & ops
   { key: "dashboard.view", label: "View club dashboard", group: "Club" },
@@ -73,8 +72,6 @@ export const permissionCatalog: PermissionDef[] = [
   { key: "members.edit", label: "Edit members", group: "Members" },
   { key: "coaching.view", label: "View coaching", group: "Coaching" },
   { key: "coaching.manage", label: "Manage coaching", group: "Coaching" },
-  { key: "matches.view", label: "View matches & open play", group: "Matches" },
-  { key: "matches.manage", label: "Manage matches & scoring", group: "Matches" },
   { key: "pos.view", label: "Use POS", group: "POS" },
   { key: "pos.create", label: "Create POS sale", group: "POS" },
   { key: "finance.view", label: "View finance", group: "Finance" },
@@ -83,11 +80,9 @@ export const permissionCatalog: PermissionDef[] = [
   { key: "marketing.manage", label: "Manage marketing", group: "Marketing" },
   { key: "settings.view", label: "View club settings", group: "Settings" },
   { key: "settings.manage", label: "Manage club settings", group: "Settings" },
-  { key: "staff.manage", label: "Manage staff & roles", group: "Settings" },
   // Member portal
   { key: "me.view", label: "View own portal", group: "Member" },
   { key: "me.book", label: "Book a court", group: "Member" },
-  { key: "me.matches", label: "Join open play", group: "Member" },
   { key: "me.membership", label: "View membership & wallet", group: "Member" },
   { key: "me.payments", label: "View payments", group: "Member" },
 ];
@@ -110,7 +105,6 @@ const staffPermissions = [
   "members.create",
   "members.edit",
   "coaching.view",
-  "matches.view",
   "pos.view",
   "pos.create",
   "marketing.view",
@@ -121,15 +115,12 @@ const coachPermissions = [
   "booking.view",
   "coaching.view",
   "coaching.manage",
-  "matches.view",
-  "matches.manage",
   "members.view",
 ];
 
 const memberPermissions = [
   "me.view",
   "me.book",
-  "me.matches",
   "me.membership",
   "me.payments",
 ];

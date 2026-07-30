@@ -3,6 +3,10 @@
 import type React from "react";
 import { createContext, useState, useContext, useEffect, useCallback } from "react";
 import { brandPresets, type BrandPreset } from "@/data/padel/platform/settings";
+import {
+  getMyAppearanceAction,
+  updateMyAppearanceAction,
+} from "@/app/preferences/actions";
 
 type Theme = "light" | "dark";
 
@@ -105,7 +109,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       const savedTheme = window.localStorage.getItem(THEME_KEY);
-      setTheme(savedTheme === "dark" ? "dark" : "light");
+      const localTheme = savedTheme === "dark" ? "dark" : "light";
+      setTheme(localTheme);
 
       const savedPalette = window.localStorage.getItem(PALETTE_KEY);
       const resolved = savedPalette && brandPresets.some((p) => p.id === savedPalette)
@@ -113,8 +118,14 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
         : DEFAULT_PALETTE;
       setPaletteId(resolved);
       applyPalette(presetById(resolved));
-
-      setIsThemeReady(true);
+      void getMyAppearanceAction()
+        .then((stored) => {
+          if (!stored) return;
+          setTheme(stored.theme);
+          setPaletteId(stored.paletteId);
+          applyPalette(presetById(stored.paletteId));
+        })
+        .finally(() => setIsThemeReady(true));
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
@@ -136,15 +147,20 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [isThemeReady, paletteId]);
 
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => (prev === "light" ? "dark" : "light"));
-  }, []);
+    setTheme((prev) => {
+      const next = prev === "light" ? "dark" : "light";
+      void updateMyAppearanceAction({ theme: next, paletteId });
+      return next;
+    });
+  }, [paletteId]);
 
   const setPalette = useCallback((id: string) => {
     if (!brandPresets.some((p) => p.id === id)) return;
     setPaletteId(id);
     // Apply immediately so the change is instant even before the effect runs.
     applyPalette(presetById(id));
-  }, []);
+    void updateMyAppearanceAction({ theme, paletteId: id });
+  }, [theme]);
 
   return (
     <ThemeContext.Provider

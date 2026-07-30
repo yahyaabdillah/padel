@@ -40,6 +40,8 @@ model m_user {
   email        String?   @db.VarChar(150)
   phone        String?   @db.VarChar(30)
   photo        String?   @db.VarChar(255)
+  theme        String    @default("light") @db.VarChar(10)
+  paletteId    String    @default("padelhub") @db.VarChar(40)
   isActive     Boolean   @default(true)
   lastLogin    DateTime? @db.Timestamp(0)
 
@@ -384,6 +386,8 @@ model t_member {
   status       String    @default("active") @db.VarChar(20) // active|inactive|frozen
   city         String?   @db.VarChar(100)
   avatar       String?   @db.VarChar(255)
+  theme        String    @default("light") @db.VarChar(10)
+  paletteId    String    @default("padelhub") @db.VarChar(40)
   onboarded    Boolean   @default(false)
   lastLogin    DateTime? @db.Timestamp(0)
 
@@ -413,6 +417,7 @@ model t_member {
   coachingSchedules t_coaching_schedule[]
   checkins t_checkin[]
   membershipHistory t_membership_history[]
+  payments t_payment[]
 
   @@unique([companyId, memberNo])
   @@unique([companyId, username])
@@ -657,6 +662,8 @@ model t_checkin {
 model t_payment {
   id          String  @id @default(uuid()) @db.Uuid
   companyId   String  @db.VarChar(50)
+  /// member who owns this payment; explicit so history is not inferred from side relations
+  memberId    String? @db.Uuid
   /// stable per-checkout reference (e.g. PAY-2026-xxxx), unique per tenant
   paymentRef  String  @db.VarChar(40)
   /// Cash | QRIS | Transfer
@@ -693,10 +700,12 @@ model t_payment {
   histories t_membership_history[]
   refunds   t_refund[]
   posSale   t_pos_sale?
+  member    t_member? @relation(fields: [memberId], references: [id])
 
   @@unique([companyId, paymentRef])
   @@unique([companyId, externalId])
   @@index([companyId])
+  @@index([memberId])
   @@index([status])
   @@index([isDeleted])
 }

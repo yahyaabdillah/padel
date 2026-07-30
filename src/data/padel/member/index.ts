@@ -1,9 +1,7 @@
 // PadelHub — member portal dummy data barrel.
 export * from "./courts";
 export * from "./bookings";
-export * from "./matches";
 export * from "./membership";
-export * from "./leaderboard";
 export * from "./payments";
 
 // Shared currency helper for the member portal.

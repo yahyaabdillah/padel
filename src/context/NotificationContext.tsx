@@ -88,7 +88,7 @@ const seedNotifications: AppNotification[] = [
     type: "match",
     read: true,
     createdAt: "2026-06-02T09:30:00",
-    href: "/matches",
+    href: "/bookings",
   },
   {
     id: "ntf-seed-4",
