@@ -1,14 +1,14 @@
 "use server";
 
-import { cookies } from "next/headers";
 import * as bcrypt from "bcryptjs";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import { applyMembershipAction, recordPayment } from "@/lib/checkout-core";
+import { calcMembershipBenefit } from "@/lib/membership-benefit";
+import { calculateCourtBasePrice } from "@/lib/court-price";
+import { quotaUnitsForDuration } from "@/lib/membership-quota";
 
 export type MemberRecord = {
   id: string;
@@ -71,17 +71,6 @@ export type RegisterMemberResult = {
   tempPassword?: string;
 };
 
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
-
 function genMemberNo(): string {
   return `PHB-2026-${String(1000 + Math.floor(Math.random() * 8999))}`;
 }
@@ -113,9 +102,9 @@ export type PlanOption = {
 
 /** Active membership plans for the tenant (by sort order) — for pickers. */
 export async function getActivePlansAction(): Promise<PlanOption[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.m_membership_plan.findMany({
     where: { companyId: session.companyId, active: true, ...NOT_DELETED },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -138,9 +127,9 @@ export async function getActivePlansAction(): Promise<PlanOption[]> {
 export async function getMemberOptionsAction(): Promise<
   { id: string; name: string; phone: string; tier: string }[]
 > {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.t_member.findMany({
     where: { companyId: session.companyId, isDeleted: 0 },
     orderBy: { createdAt: "desc" },
@@ -156,10 +145,10 @@ export async function getMemberOptionsAction(): Promise<
 
 /** List members for the current tenant (newest first). */
 export async function getMembersAction(): Promise<MemberRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
 
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.t_member.findMany({
     where: { companyId: session.companyId, isDeleted: 0 },
     orderBy: { createdAt: "desc" },
@@ -203,11 +192,11 @@ export async function assignMemberPlanAction(
   const guard = await requirePermission("members.data", "update");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
 
   const member = await db.t_member.findFirst({
     where: { id: memberId, companyId: session.companyId, ...NOT_DELETED },
-    select: { id: true, planId: true },
+    select: { id: true, planId: true, joinFeePaid: true },
   });
   if (!member) return { success: false, error: "Member tidak ditemukan." };
 
@@ -244,23 +233,24 @@ export async function assignMemberPlanAction(
 
   try {
     await db.$transaction(async (tx) => {
+      const joinFee = plan.joinFee;
       const hist = await applyMembershipAction(tx, {
         companyId: session.companyId,
         memberId: member.id,
         planId: plan.id,
         action,
         actor: { kind: "staff", userId: session.userId },
-        joinFee: plan.joinFee,
-        method: plan.joinFee > 0 ? "Cash" : undefined,
+        joinFee,
+        method: joinFee > 0 ? "Cash" : undefined,
       });
-      if (plan.joinFee > 0) {
+      if (joinFee > 0) {
         const pay = await recordPayment(tx, {
           companyId: session.companyId,
           method: "Cash",
-          membershipAmount: plan.joinFee,
+          membershipAmount: joinFee,
           courtAmount: 0,
           paidByType: "staff",
-          cashReceived: plan.joinFee,
+          cashReceived: joinFee,
           actor: { kind: "staff", userId: session.userId },
         });
         await tx.t_membership_history.update({
@@ -294,7 +284,7 @@ export async function updateMemberAction(
   const guard = await requirePermission("members.data", "update");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   await db.t_member.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: {
@@ -317,7 +307,7 @@ export async function deleteMemberAction(
   const guard = await requirePermission("members.data", "delete");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   await db.t_member.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: auditSoftDelete(session.userId),
@@ -330,11 +320,11 @@ export async function deleteMemberAction(
 export async function checkMemberUsernameAction(
   username: string,
 ): Promise<{ available: boolean }> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return { available: false };
   const u = username.trim().toLowerCase();
   if (u.length < 3) return { available: false };
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const existing = await db.t_member.findFirst({
     where: { companyId: session.companyId, username: u },
   });
@@ -362,7 +352,7 @@ export async function exportMembersCsvAction(): Promise<{
   const guard = await requirePermission("members.data", "export");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.t_member.findMany({
     where: { companyId: session.companyId, ...NOT_DELETED },
     orderBy: { createdAt: "desc" },
@@ -412,7 +402,7 @@ export async function importMembersCsvAction(
   const guard = await requirePermission("members.data", "import");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
 
   const lines = csv
     .split(/\r?\n/)
@@ -545,7 +535,7 @@ export async function registerMemberAction(
       return { success: false, error: "Nomor telepon tidak valid." };
     }
 
-    const db = await getTenantDb();
+    const db = await getTenantDb(session.dbConfig);
 
     // username must be unique within the tenant
     const clash = await db.t_member.findFirst({
@@ -560,13 +550,25 @@ export async function registerMemberAction(
     const passwordHash = await bcrypt.hash(tempPassword, 10);
 
     // Resolve the membership plan (if any) for assignment + tier label.
-    let planRow: { id: string; name: string; joinFee: number } | null = null;
+    let planRow: {
+      id: string;
+      name: string;
+      joinFee: number;
+      includedCourtBookings: number;
+      courtDiscountPct: number;
+    } | null = null;
     if (input.planId) {
       const plan = await db.m_membership_plan.findFirst({
         where: { id: input.planId, companyId: session.companyId, active: true, ...NOT_DELETED },
       });
       if (!plan) return { success: false, error: "Plan membership tidak ditemukan." };
-      planRow = { id: plan.id, name: plan.name, joinFee: plan.joinFee };
+      planRow = {
+        id: plan.id,
+        name: plan.name,
+        joinFee: plan.joinFee,
+        includedCourtBookings: plan.includedCourtBookings,
+        courtDiscountPct: plan.courtDiscountPct,
+      };
     }
 
     // Whether the join fee is settled at registration (page checkout) or left
@@ -574,27 +576,25 @@ export async function registerMemberAction(
     const joinFeePaidNow = Boolean(planRow) && (planRow!.joinFee === 0 || input.collectJoinFee === true);
     const joinFeeCharged = joinFeePaidNow && planRow!.joinFee > 0 ? planRow!.joinFee : 0;
 
-    // Create the member WITHOUT a plan; the membership is then applied through
-    // the shared core so a t_membership_history row (+ payment) is written and
-    // the join fee is NEVER recorded on t_booking.
-    const member = await db.t_member.create({
-      data: {
-        companyId: session.companyId,
-        memberNo,
-        username,
-        passwordHash,
-        name: input.name.trim(),
-        phone: input.phone,
-        email: input.email?.trim() || null,
-        tier: "daily",
-        status: "active",
-        onboarded: false,
-        city: input.city?.trim() || null,
-        ...auditCreate(session.userId),
-      },
-    });
+    const member = await db.$transaction(async (tx) => {
+      // Member + membership + optional booking + payment are one atomic unit.
+      const member = await tx.t_member.create({
+        data: {
+          companyId: session.companyId,
+          memberNo,
+          username,
+          passwordHash,
+          name: input.name.trim(),
+          phone: input.phone,
+          email: input.email?.trim() || null,
+          tier: "daily",
+          status: "active",
+          onboarded: false,
+          city: input.city?.trim() || null,
+          ...auditCreate(session.userId),
+        },
+      });
 
-    await db.$transaction(async (tx) => {
       // 1. Membership FIRST (writes history; sets plan/quota/cycle on t_member).
       let historyId: string | undefined;
       if (planRow) {
@@ -615,32 +615,106 @@ export async function registerMemberAction(
       let bookingId: string | undefined;
       let courtTotal = 0;
       if (input.bookings && input.bookings.length > 0) {
-        const first = input.bookings[0];
-        courtTotal = input.bookings.reduce((s, b) => s + b.price, 0);
-        const quotaConsumed = input.bookings.filter((b) => b.price === 0).length;
+        const parsed = input.bookings.map((booking) => {
+          const start = new Date(booking.start);
+          const end = new Date(booking.end);
+          quotaUnitsForDuration((end.getTime() - start.getTime()) / 60_000);
+          if (
+            Number.isNaN(start.getTime()) ||
+            Number.isNaN(end.getTime()) ||
+            start <= new Date()
+          ) {
+            throw new Error("BOOKING_INVALID");
+          }
+          return { booking, start, end };
+        });
+        const courtIds = [...new Set(parsed.map((item) => item.booking.courtId))];
+        const courts = await tx.m_court.findMany({
+          where: {
+            id: { in: courtIds },
+            companyId: session.companyId,
+            status: "active",
+            ...NOT_DELETED,
+          },
+        });
+        if (courts.length !== courtIds.length) throw new Error("COURT_UNAVAILABLE");
+        const courtById = new Map(courts.map((court) => [court.id, court]));
+        const priced = parsed.map((item) => {
+          const court = courtById.get(item.booking.courtId);
+          if (!court) throw new Error("COURT_UNAVAILABLE");
+          const basePrice = calculateCourtBasePrice(
+            {
+              schedule: court.schedule as never,
+              priceOffPeak: court.priceOffPeak,
+              pricePeak: court.pricePeak,
+            },
+            item.start,
+            item.end,
+          );
+          return { ...item, basePrice };
+        });
+        const conflictWindows = priced.map((item) => ({
+          courtId: item.booking.courtId,
+          start: { lt: item.end },
+          end: { gt: item.start },
+        }));
+        const [bookingConflict, maintenanceConflict] = await Promise.all([
+          tx.t_booking_detail.findFirst({
+            where: {
+              companyId: session.companyId,
+              isDeleted: 0,
+              status: { not: "cancelled" },
+              OR: conflictWindows,
+            },
+            select: { id: true },
+          }),
+          tx.t_court_maintenance.findFirst({
+            where: {
+              companyId: session.companyId,
+              isDeleted: 0,
+              OR: conflictWindows,
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (bookingConflict || maintenanceConflict) {
+          throw new Error("BOOKING_CONFLICT");
+        }
+        const benefit = calcMembershipBenefit({
+          plan: planRow,
+          quotaRemaining: planRow?.includedCourtBookings ?? 0,
+          sessions: priced.map((item) => ({ basePrice: item.basePrice })),
+        });
+        courtTotal = benefit.payable;
+        const quotaConsumed = benefit.quotaCoveredCount;
         const header = await tx.t_booking.create({
           data: {
             companyId: session.companyId,
             memberId: member.id,
-            type: first.type,
-            status: first.status,
-            customer: first.customer,
+            type: planRow ? "member" : "walk_in",
+            status: "confirmed",
+            customer: member.name,
             totalPrice: courtTotal,
             joinFee: 0, // join fee now lives in t_membership_history
             quotaConsumed,
             ...auditCreate(session.userId),
             details: {
-              create: input.bookings.map((b) => ({
+              create: priced.map((item, index) => ({
                 companyId: session.companyId,
-                courtId: b.courtId,
-                start: new Date(b.start),
-                end: new Date(b.end),
-                partySize: b.partySize,
-                basePrice: b.price,
-                price: b.price,
-                status: b.status,
-                note: b.note ?? null,
-                ...auditCreate(b.createdBy || session.userId),
+                courtId: item.booking.courtId,
+                start: item.start,
+                end: item.end,
+                partySize: Math.max(2, Math.min(4, item.booking.partySize || 4)),
+                basePrice: item.basePrice,
+                price: benefit.sessions[index].payable,
+                rateNote: benefit.sessions[index].coveredByQuota
+                  ? "free (quota)"
+                  : benefit.sessions[index].discountPct > 0
+                    ? "discount"
+                    : "regular",
+                status: "confirmed",
+                note: item.booking.note ?? null,
+                ...auditCreate(session.userId),
               })),
             },
           },
@@ -676,6 +750,7 @@ export async function registerMemberAction(
           await tx.t_booking.update({ where: { id: bookingId }, data: { paymentId: pay.id } });
         }
       }
+      return member;
     });
 
     revalidatePath("/members");

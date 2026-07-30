@@ -168,8 +168,10 @@ export default function OnboardingStepper() {
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <div className="sm:col-span-2 flex items-center gap-4">
               <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-[var(--color-primary-light)] text-lg font-bold text-[var(--color-primary)]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 {form.avatar ? (
+                  // Avatar is a user-provided data URL; next/image does not
+                  // optimize data URLs and would add no benefit here.
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img src={form.avatar} alt="avatar" className="h-full w-full object-cover" />
                 ) : (
                   initials

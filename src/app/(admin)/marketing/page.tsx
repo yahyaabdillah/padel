@@ -4,7 +4,6 @@ import React, { useMemo, useState } from "react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
 import StatCard from "@/components/club-engage/StatCard";
 import { formatIDR, formatDateShort, formatNumber } from "@/components/club-engage/format";
-import Card from "@/components/ui/card/Card";
 import Badge from "@/components/ui/badge/Badge";
 import Button from "@/components/ui/button/Button";
 import Tabs from "@/components/ui/tabs/Tabs";

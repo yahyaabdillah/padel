@@ -24,6 +24,12 @@ export type TimeGroupRange = {
   sortOrder: number;
 };
 
+export type BookingScheduleDay = {
+  day: number;
+  available: boolean;
+  slots: string[];
+};
+
 const dateKeyPattern = /^\d{4}-\d{2}-\d{2}$/;
 
 export function isValidDateKey(value: string): boolean {
@@ -171,6 +177,36 @@ export function resetCourtForSlots(
     selectedSlotIds: normalizeSelectedSlots(selectedSlotIds),
     selectedCourtId: null,
   };
+}
+
+/**
+ * Return the 60-minute start slots that are actually offered by at least one
+ * active court on the selected weekday. Occupancy is intentionally not checked
+ * here: an offered-but-occupied slot still needs to be shown as "Penuh".
+ */
+export function bookingSlotStartsForSchedules(
+  courtSchedules: BookingScheduleDay[][],
+  day: number,
+): number[] {
+  return Array.from(
+    { length: 24 / (BOOKING_SLOT_MINUTES / 60) },
+    (_, index) => index * STORAGE_SLOTS_PER_SESSION,
+  ).filter((startSlot) =>
+    courtSchedules.some((schedule) => {
+      const selectedDay = schedule.find((item) => item.day === day);
+      if (!selectedDay?.available) return false;
+      for (
+        let slot = startSlot;
+        slot < startSlot + STORAGE_SLOTS_PER_SESSION;
+        slot++
+      ) {
+        if (!selectedDay.slots[slot] || selectedDay.slots[slot] === "closed") {
+          return false;
+        }
+      }
+      return true;
+    }),
+  );
 }
 
 export function groupSlotsByTimeGroups<T extends { startSlot: number }>(

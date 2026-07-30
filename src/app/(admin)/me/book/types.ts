@@ -65,6 +65,18 @@ export type BookSessionInput = {
 export type CreateMyBookingInput = {
   sessions: BookSessionInput[];
   paymentMethod: MemberPaymentMethod;
+  /** Midtrans order id; omitted only for a zero-value quota checkout. */
+  providerOrderId?: string;
+};
+
+export type MidtransCheckoutResult = {
+  success: boolean;
+  error?: string;
+  free?: boolean;
+  orderId?: string;
+  token?: string;
+  clientKey?: string;
+  production?: boolean;
 };
 
 export type CreateMyBookingResult = {

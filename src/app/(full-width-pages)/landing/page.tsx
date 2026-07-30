@@ -316,7 +316,7 @@ export default function LandingPage() {
         <div className="mx-auto max-w-2xl text-center">
           <Badge variant="light" color="secondary">Loved by club owners</Badge>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-[var(--text-heading)] sm:text-4xl">
-            Don't just take our word for it
+            Don&apos;t just take our word for it
           </h2>
         </div>
         <div className="mt-12 grid grid-cols-1 gap-5 md:grid-cols-3">
@@ -326,7 +326,9 @@ export default function LandingPage() {
               className="flex flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-6"
             >
               <div className="text-2xl text-[var(--color-accent)]">★★★★★</div>
-              <blockquote className="mt-3 flex-1 text-[var(--text-body)]">"{t.quote}"</blockquote>
+              <blockquote className="mt-3 flex-1 text-[var(--text-body)]">
+                &ldquo;{t.quote}&rdquo;
+              </blockquote>
               <figcaption className="mt-5 flex items-center gap-3">
                 <Avatar src={t.avatar} name={t.name} size="md" />
                 <div>

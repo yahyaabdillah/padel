@@ -8,9 +8,7 @@
 
 import {
   padelClasses as seedPadelClasses,
-  coachById,
   coaches,
-  weekDays,
   type PadelClass,
   type ClassType,
   type ClassLevel,

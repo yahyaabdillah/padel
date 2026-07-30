@@ -28,7 +28,6 @@ import {
 } from "./actions";
 
 export default function CheckinClient() {
-  const toast = useToast();
   const { can, isSuper } = useAccess();
   const canCreate = isSuper || can("checkin", "create");
 

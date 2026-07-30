@@ -6,24 +6,10 @@
 // menu + action grants for the current session's role so the sidebar and
 // page actions can be gated dynamically.
 
-import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { masterPrisma } from "@/lib/master-db";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
-import { requirePermission } from "@/lib/access-guard";
-
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
+import { readSession, requirePermission } from "@/lib/access-guard";
 
 const NOT_DELETED = { isDeleted: 0 } as const;
 
@@ -72,7 +58,7 @@ export type RoleMenuPermission = MenuActions & { menuId: string; menuKey: string
  * ════════════════════════════════════════════════════════ */
 
 export async function getRolesAction(): Promise<RoleRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
   const rows = await masterPrisma.m_role.findMany({
     where: { ...NOT_DELETED },
@@ -192,7 +178,7 @@ export async function deleteRoleAction(id: string): Promise<{ success: boolean; 
  * ════════════════════════════════════════════════════════ */
 
 export async function getMenusAction(): Promise<MenuRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
   const rows = await masterPrisma.m_menu.findMany({
     where: { ...NOT_DELETED },
@@ -348,7 +334,7 @@ export async function reorderMenuAction(
 export async function getRoleMenuPermissionsAction(
   roleId: string,
 ): Promise<RoleMenuPermission[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
   const rows = await masterPrisma.m_role_menu.findMany({
     where: { roleId, ...NOT_DELETED },
@@ -446,7 +432,7 @@ export type EffectiveAccess = {
  * canView) and hard-gate routes/actions by the flags.
  */
 export async function getEffectiveAccessAction(): Promise<EffectiveAccess> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return { roleKey: "", isSuper: false, menus: [] };
 
   const role = await masterPrisma.m_role.findUnique({ where: { key: session.role } });

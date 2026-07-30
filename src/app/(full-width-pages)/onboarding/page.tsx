@@ -86,7 +86,7 @@ export default function OnboardingPage() {
             <div className="mb-8 text-center">
               <h1 className="text-2xl font-bold text-[var(--text-heading)]">Set up your club</h1>
               <p className="text-sm text-[var(--text-caption)]">
-                A few quick steps and you'll be taking bookings.
+                A few quick steps and you&apos;ll be taking bookings.
               </p>
             </div>
 
@@ -151,7 +151,7 @@ export default function OnboardingPage() {
                     </div>
                   </div>
                   <div className="rounded-xl bg-[var(--surface-muted)] p-4 text-sm text-[var(--text-caption)]">
-                    💡 We'll auto-create {courtCount} courts named Court 1–{courtCount}. You can rename and
+                    💡 We&apos;ll auto-create {courtCount} courts named Court 1–{courtCount}. You can rename and
                     set pricing later.
                   </div>
                 </div>

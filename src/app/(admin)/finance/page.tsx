@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import DataTable, { type Column } from "@/components/ui/table/DataTable";
 import Tabs from "@/components/ui/tabs/Tabs";
@@ -10,14 +10,13 @@ import FinanceNav from "@/components/club-core/FinanceNav";
 import ExportButton from "@/components/club-core/ExportButton";
 import { formatIDR } from "@/components/club-core/format";
 import {
-  mockTransactions,
-  financeSummary,
   type Transaction,
   type TxnCategory,
   txnCategoryMeta,
   txnMethodMeta,
   txnStatusMeta,
 } from "@/data/padel/club/finance";
+import { getFinanceTransactionsAction } from "./actions";
 
 const catTabs: { value: TxnCategory | "all"; label: string }[] = [
   { value: "all", label: "All" },
@@ -31,12 +30,41 @@ const catTabs: { value: TxnCategory | "all"; label: string }[] = [
 export default function FinancePage() {
   const [cat, setCat] = useState<TxnCategory | "all">("all");
   const [query, setQuery] = useState("");
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
 
-  const summary = useMemo(() => financeSummary(), []);
+  useEffect(() => {
+    void getFinanceTransactionsAction().then(setTransactions);
+  }, []);
+  const summary = useMemo(() => {
+    const now = new Date();
+    const todayKey = now.toISOString().slice(0, 10);
+    const monthKey = todayKey.slice(0, 7);
+    const paid = transactions.filter((item) => item.status === "paid");
+    const today = paid
+      .filter((item) => item.date.startsWith(todayKey))
+      .reduce((sum, item) => sum + item.amount, 0);
+    const monthTotal = paid
+      .filter((item) => item.date.startsWith(monthKey))
+      .reduce((sum, item) => sum + item.amount, 0);
+    const refunds = Math.abs(
+      transactions
+        .filter((item) => item.category === "refund")
+        .reduce((sum, item) => sum + item.amount, 0),
+    );
+    return {
+      today,
+      monthTotal,
+      refunds,
+      paidCount: paid.length,
+      avgTicket: paid.length
+        ? Math.round(paid.reduce((sum, item) => sum + item.amount, 0) / paid.length)
+        : 0,
+    };
+  }, [transactions]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return mockTransactions.filter((t) => {
+    return transactions.filter((t) => {
       if (cat !== "all" && t.category !== cat) return false;
       if (!q) return true;
       return (
@@ -45,7 +73,7 @@ export default function FinancePage() {
         t.ref.toLowerCase().includes(q)
       );
     });
-  }, [cat, query]);
+  }, [cat, query, transactions]);
 
   const columns: Column<Transaction>[] = [
     {

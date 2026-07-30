@@ -5,12 +5,11 @@
 // Direction follows the company "Staff scan booking" toggle:
 //   ON  → member DISPLAYS a signed booking-token QR (staff scans it elsewhere)
 //   OFF → member SCANS the static staff QR here, self-checking-in
-import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { NOT_DELETED } from "@/lib/audit";
+import { readSession } from "@/lib/access-guard";
 import {
   DEFAULT_CHECKIN_SETTINGS,
   type CompanyCheckinSettings,
@@ -22,15 +21,8 @@ import {
 } from "@/lib/checkin-core";
 
 async function requireMemberSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    const s = JSON.parse(raw) as AuthSession;
-    return s.role === "member" ? s : null;
-  } catch {
-    return null;
-  }
+  const session = await readSession();
+  return session?.role === "member" ? session : null;
 }
 
 async function loadSettings(

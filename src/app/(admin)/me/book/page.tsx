@@ -60,7 +60,7 @@ export default function BookCourtPage() {
     void loadData();
   }, [loadData]);
 
-  const timeGroups = data?.timeGroups ?? [];
+  const timeGroups = useMemo(() => data?.timeGroups ?? [], [data?.timeGroups]);
   const todayKey = toKey(new Date());
   const nowHour = new Date().getHours();
 

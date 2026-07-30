@@ -1,23 +1,9 @@
 "use server";
 
-import { cookies } from "next/headers";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
-
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
 
 export type MaintenanceKind = "maintenance" | "holiday" | "private_event" | "other";
 
@@ -49,7 +35,7 @@ const local = (d: Date) =>
 
 /** List maintenance windows for the tenant (soonest first), with court info. */
 export async function getMaintenanceAction(): Promise<MaintenanceRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
   const db = await getTenantDb();
   const rows = await db.t_court_maintenance.findMany({

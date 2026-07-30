@@ -1,6 +1,13 @@
 // PadelHub — member payment history + receipts (dummy, no DB).
 
-export type PaymentMethod = "Wallet" | "Credit Card" | "GoPay" | "Bank Transfer" | "Cash";
+export type PaymentMethod =
+  | "Wallet"
+  | "Credit Card"
+  | "GoPay"
+  | "Bank Transfer"
+  | "Transfer"
+  | "QRIS"
+  | "Cash";
 export type PaymentStatus = "paid" | "pending" | "refunded" | "failed";
 
 export interface PaymentRecord {

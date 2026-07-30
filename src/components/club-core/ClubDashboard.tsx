@@ -9,7 +9,7 @@ import StatCard from "./StatCard";
 import ToneBadge from "./ToneBadge";
 import PeakHoursChart from "./PeakHoursChart";
 import { ClubDataProvider, useClubData } from "./ClubDataContext";
-import { formatIDR, formatTimeRange, relativeDayLabel } from "./format";
+import { formatIDR, formatTimeRange } from "./format";
 import { currentClub } from "@/data/padel/tenant";
 import { gridHours, todayKey, bookingTypeMeta, bookingStatusMeta } from "@/data/padel/club/bookings";
 import { isPeakHour } from "@/data/padel/club/courts";

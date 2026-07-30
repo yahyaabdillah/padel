@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import DataTable, { type Column } from "@/components/ui/table/DataTable";
 import { ModalDialog } from "@/components/ui/modal";
@@ -12,25 +12,33 @@ import ExportButton from "@/components/club-core/ExportButton";
 import { formatIDR, formatDate } from "@/components/club-core/format";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import {
-  mockInvoices,
   invoiceTotal,
   type Invoice,
   invoiceStatusMeta,
 } from "@/data/padel/club/finance";
+import { getInvoicesAction } from "./actions";
 
 export default function InvoicesPage() {
   const [selected, setSelected] = useState<Invoice | null>(null);
   const [open, setOpen] = useState(false);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [loading, setLoading] = useState(true);
   const toast = useToast();
 
+  useEffect(() => {
+    void getInvoicesAction()
+      .then(setInvoices)
+      .finally(() => setLoading(false));
+  }, []);
+
   const summary = useMemo(() => {
-    const outstanding = mockInvoices
+    const outstanding = invoices
       .filter((i) => i.status === "sent" || i.status === "overdue")
       .reduce((s, i) => s + invoiceTotal(i), 0);
-    const overdue = mockInvoices.filter((i) => i.status === "overdue").length;
-    const paid = mockInvoices.filter((i) => i.status === "paid").reduce((s, i) => s + invoiceTotal(i), 0);
-    return { outstanding, overdue, paid, count: mockInvoices.length };
-  }, []);
+    const overdue = invoices.filter((i) => i.status === "overdue").length;
+    const paid = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + invoiceTotal(i), 0);
+    return { outstanding, overdue, paid, count: invoices.length };
+  }, [invoices]);
 
   const openInvoice = (inv: Invoice) => {
     setSelected(inv);
@@ -109,23 +117,23 @@ export default function InvoicesPage() {
           <h3 className="text-base font-medium text-gray-800 dark:text-white/90">All invoices</h3>
           <div className="flex gap-2">
             <ExportButton filename="invoices.csv" />
-            <Button
-              variant="primary"
-              size="sm"
-              startIcon={<span className="text-base leading-none">+</span>}
-              onClick={() => toast.info("Invoice draft created — add line items to send.", "New invoice")}
-            >
-              New invoice
+            <Button variant="primary" size="sm" onClick={() => window.print()}>
+              Print
             </Button>
           </div>
         </div>
 
         <DataTable
           columns={columns}
-          data={mockInvoices}
+          data={invoices}
           rowKey={(i) => i.id}
           onRowClick={openInvoice}
           defaultSort={{ key: "issuedAt", direction: "desc" }}
+          emptyState={
+            loading ? (
+              <span className="text-sm text-gray-400">Memuat invoice…</span>
+            ) : undefined
+          }
         />
       </div>
 
@@ -142,11 +150,12 @@ export default function InvoicesPage() {
             <Button
               variant="primary"
               onClick={() => {
-                toast.success(`Invoice ${selected?.number} sent to the member.`, "Sent");
+                window.print();
+                toast.success(`Invoice ${selected?.number} siap dicetak.`, "Invoice");
                 setOpen(false);
               }}
             >
-              Send invoice
+              Print invoice
             </Button>
           </div>
         }

@@ -7,7 +7,13 @@
 //
 // Coach assignment is SESSION-BASED: each session can have a different coach.
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import FullCalendar from "@fullcalendar/react";
+import timeGridPlugin from "@fullcalendar/timegrid";
+import dayGridPlugin from "@fullcalendar/daygrid";
+import listPlugin from "@fullcalendar/list";
+import interactionPlugin from "@fullcalendar/interaction";
+import type { EventClickArg } from "@fullcalendar/core";
 import {
   Plus,
   CalendarDays,
@@ -17,6 +23,8 @@ import {
   Check,
   ArrowLeft,
   Clock,
+  UserRoundCheck,
+  Users,
 } from "lucide-react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
 import Card from "@/components/ui/card/Card";
@@ -51,6 +59,7 @@ import {
   WEEKDAY_SHORT,
   WEEKDAY_LABELS,
 } from "@/lib/coaching";
+import { scheduleRecordsToCalendarEvents } from "@/lib/coaching-calendar";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const dateKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -141,7 +150,6 @@ export default function CoachScheduleManager() {
           packages={packages}
           members={members}
           coaches={coaches}
-          coachOptions={coachOptions}
           onCancel={() => setView("list")}
           onSaved={() => {
             setView("list");
@@ -152,6 +160,7 @@ export default function CoachScheduleManager() {
         <ScheduleList
           schedules={schedules}
           loading={loading}
+          coaches={coaches}
           coachOptions={coachOptions}
           onDelete={(s) => setConfirmDelete(s)}
           onNew={() => setView("build")}
@@ -191,13 +200,61 @@ const statusMeta: Record<string, { label: string; color: "success" | "info" | "w
 const ScheduleList: React.FC<{
   schedules: ScheduleRecord[];
   loading: boolean;
+  coaches: CoachRecord[];
   coachOptions: { value: string; label: string }[];
   onDelete: (s: ScheduleRecord) => void;
   onNew: () => void;
   onReassigned: () => void;
-}> = ({ schedules, loading, coachOptions, onDelete, onNew, onReassigned }) => {
+}> = ({
+  schedules,
+  loading,
+  coaches,
+  coachOptions,
+  onDelete,
+  onNew,
+  onReassigned,
+}) => {
   const toast = useToast();
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const calendarRef = useRef<FullCalendar>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
+  const coachColors = useMemo(
+    () => new Map(coaches.map((coach) => [coach.id, coach.color])),
+    [coaches],
+  );
+  const events = useMemo(
+    () => scheduleRecordsToCalendarEvents(schedules, coachColors),
+    [schedules, coachColors],
+  );
+  const selectedSchedule = schedules.find((schedule) =>
+    schedule.sessions.some((item) => item.id === selectedSessionId),
+  );
+  const selectedSession = selectedSchedule?.sessions.find(
+    (item) => item.id === selectedSessionId,
+  );
+  const selected =
+    selectedSchedule && selectedSession
+      ? { schedule: selectedSchedule, session: selectedSession }
+      : null;
+  const firstCalendarDate = useMemo(() => {
+    if (events.length === 0) return undefined;
+    const now = new Date().toISOString().slice(0, 19);
+    return (
+      [...events]
+        .filter((event) => event.end >= now)
+        .sort((a, b) => a.start.localeCompare(b.start))[0]?.start ??
+      [...events].sort((a, b) => b.start.localeCompare(a.start))[0]?.start
+    );
+  }, [events]);
+  const stats = useMemo(() => {
+    const sessions = schedules.flatMap((schedule) => schedule.sessions);
+    return {
+      schedules: schedules.filter((schedule) => schedule.status === "active").length,
+      sessions: sessions.length,
+      assigned: sessions.filter((session) => session.coachId).length,
+      noCoach: sessions.filter((session) => !session.coachId).length,
+    };
+  }, [schedules]);
 
   const reassign = async (sessionId: string, coachId: string | null) => {
     const res = await reassignSessionCoachAction(sessionId, coachId);
@@ -206,7 +263,17 @@ const ScheduleList: React.FC<{
       return;
     }
     toast.success("Coach diperbarui.");
+    setSelectedSessionId(null);
     onReassigned();
+  };
+
+  const handleEventClick = (arg: EventClickArg) => {
+    setSelectedSessionId(arg.event.id);
+  };
+
+  const focusSchedule = (schedule: ScheduleRecord) => {
+    const first = schedule.sessions[0];
+    if (first) calendarRef.current?.getApi().gotoDate(first.start);
   };
 
   if (loading) {
@@ -230,92 +297,190 @@ const ScheduleList: React.FC<{
   }
 
   return (
-    <div className="space-y-4">
-      {schedules.map((s) => {
-        const open = expanded === s.id;
-        const noCoachCount = s.sessions.filter((x) => !x.coachId).length;
-        const sm = statusMeta[s.status] ?? statusMeta.active;
-        return (
-          <Card key={s.id} padding="none" className="overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-3 p-5">
-              <div className="flex items-center gap-3">
-                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-primary-light)] text-[var(--color-primary)]">
-                  <CalendarDays className="h-5 w-5" />
-                </span>
-                <div>
-                  <h5 className="text-base font-bold text-[var(--text-heading)]">{s.memberName}</h5>
-                  <p className="text-xs text-[var(--text-caption)]">
-                    {s.packageName} · {s.totalSessions} sesi · mulai {fmtDate(s.startDate)}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge size="sm" color={sm.color} variant="light">{sm.label}</Badge>
-                {noCoachCount > 0 && (
-                  <Badge size="sm" color="warning" variant="light">{noCoachCount} tanpa coach</Badge>
-                )}
-                <span className="text-sm font-semibold text-[var(--text-heading)]">{formatIDR(s.price)}</span>
-                <Button size="sm" variant="outline" onClick={() => setExpanded(open ? null : s.id)}>
-                  {open ? "Tutup" : "Lihat sesi"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="!text-rose-500 hover:!bg-rose-50 dark:hover:!bg-rose-500/10"
-                  onClick={() => onDelete(s)}
-                  aria-label="Hapus jadwal"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+    <div className="space-y-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          {
+            label: "Jadwal aktif",
+            value: stats.schedules,
+            icon: CalendarDays,
+            tone: "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300",
+          },
+          {
+            label: "Total sesi",
+            value: stats.sessions,
+            icon: Clock,
+            tone: "bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300",
+          },
+          {
+            label: "Coach terpasang",
+            value: stats.assigned,
+            icon: UserRoundCheck,
+            tone: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300",
+          },
+          {
+            label: "Perlu coach",
+            value: stats.noCoach,
+            icon: AlertTriangle,
+            tone: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
+          },
+        ].map((item) => {
+          const Icon = item.icon;
+          return (
+            <div
+              key={item.label}
+              className="flex items-center gap-3 rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-4"
+            >
+              <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${item.tone}`}>
+                <Icon className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-xl font-bold leading-none text-[var(--text-heading)]">{item.value}</p>
+                <p className="mt-1 text-xs text-[var(--text-caption)]">{item.label}</p>
               </div>
             </div>
+          );
+        })}
+      </div>
 
-            {open && (
-              <div className="border-t border-[var(--border-light)] bg-[var(--surface-muted)]/40 p-5">
-                <div className="space-y-2">
-                  {s.sessions.map((x) => {
-                    const xm = statusMeta[x.status] ?? statusMeta.scheduled;
-                    return (
-                      <div
-                        key={x.id}
-                        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] px-4 py-2.5"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--surface-muted)] text-xs font-bold text-[var(--text-caption)]">
-                            {x.sequence}
-                          </span>
-                          <div>
-                            <p className="text-sm font-medium text-[var(--text-heading)]">
-                              {fmtDate(x.start)}
-                            </p>
-                            <p className="text-xs text-[var(--text-caption)]">
-                              {fmtTime(x.start)}–{fmtTime(x.end)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {!x.coachId && (
-                            <Badge size="sm" color="warning" variant="light">Tanpa coach</Badge>
-                          )}
-                          <div className="w-44">
-                            <Select
-                              options={[{ value: "", label: "— Tanpa coach —" }, ...coachOptions]}
-                              value={x.coachId ?? ""}
-                              size="sm"
-                              clearable={false}
-                              onChange={(v) => reassign(x.id, (v as string) || null)}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
+        <div className="overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-light)] px-5 py-4">
+            <div>
+              <h3 className="text-sm font-semibold text-[var(--text-heading)]">Kalender sesi</h3>
+              <p className="mt-0.5 text-xs text-[var(--text-caption)]">
+                Klik sesi untuk melihat detail atau mengganti coach.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3 text-[11px] text-[var(--text-caption)]">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-[#6D5BFF]" />
+                Terjadwal
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-[#F59E0B]" />
+                Tanpa coach
+              </span>
+            </div>
+          </div>
+          <div className="coaching-calendar p-2 sm:p-4">
+            <FullCalendar
+              ref={calendarRef}
+              plugins={[timeGridPlugin, dayGridPlugin, listPlugin, interactionPlugin]}
+              initialView="timeGridWeek"
+              initialDate={firstCalendarDate}
+              headerToolbar={{
+                left: "prev,next today",
+                center: "title",
+                right: "timeGridWeek,timeGridDay,listWeek",
+              }}
+              buttonText={{
+                today: "Hari ini",
+                week: "Minggu",
+                day: "Hari",
+                list: "Agenda",
+              }}
+              slotMinTime="06:00:00"
+              slotMaxTime="23:00:00"
+              slotDuration="00:30:00"
+              allDaySlot={false}
+              nowIndicator
+              height="auto"
+              expandRows
+              events={events}
+              eventClick={handleEventClick}
+              eventClassNames={(arg) => [
+                `coaching-event-${arg.event.extendedProps.status ?? "scheduled"}`,
+              ]}
+              dayHeaderFormat={{ weekday: "short", day: "numeric", month: "short" }}
+            />
+          </div>
+        </div>
+
+        <aside className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-[var(--text-heading)]">Program aktif</h3>
+              <p className="text-xs text-[var(--text-caption)]">{schedules.length} jadwal member</p>
+            </div>
+            <Users className="h-4 w-4 text-[var(--text-muted)]" />
+          </div>
+          <div className="max-h-[43rem] space-y-2 overflow-y-auto pr-1 custom-scrollbar">
+            {schedules.map((schedule) => {
+              const meta = statusMeta[schedule.status] ?? statusMeta.active;
+              const noCoach = schedule.sessions.filter((session) => !session.coachId).length;
+              return (
+                <div
+                  key={schedule.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => focusSchedule(schedule)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") focusSchedule(schedule);
+                  }}
+                  className="group w-full cursor-pointer rounded-2xl border border-[var(--border-default)] bg-[var(--surface-card)] p-4 text-left transition-all hover:-translate-y-0.5 hover:border-[var(--color-primary)] hover:shadow-md"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-[var(--text-heading)]">{schedule.memberName}</p>
+                      <p className="mt-0.5 truncate text-xs text-[var(--text-caption)]">{schedule.packageName}</p>
+                    </div>
+                    <Badge size="sm" color={meta.color} variant="light">{meta.label}</Badge>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-xs">
+                    <span className="text-[var(--text-caption)]">
+                      {schedule.sessions.length} sesi{noCoach > 0 ? ` · ${noCoach} tanpa coach` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Hapus jadwal ${schedule.memberName}`}
+                      className="rounded-lg p-1.5 text-[var(--text-muted)] opacity-0 transition hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100 dark:hover:bg-rose-500/10"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDelete(schedule);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
+
+      <ModalDialog
+        isOpen={selected != null}
+        onClose={() => setSelectedSessionId(null)}
+        title={selected ? `Sesi ${selected.session.sequence} · ${selected.schedule.memberName}` : "Detail sesi"}
+        description={selected?.schedule.packageName}
+        size="sm"
+      >
+        {selected && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-[var(--surface-muted)] p-3">
+                <p className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Tanggal</p>
+                <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">{fmtDate(selected.session.start)}</p>
               </div>
-            )}
-          </Card>
-        );
-      })}
+              <div className="rounded-xl bg-[var(--surface-muted)] p-3">
+                <p className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Waktu</p>
+                <p className="mt-1 text-sm font-semibold text-[var(--text-heading)]">
+                  {fmtTime(selected.session.start)}–{fmtTime(selected.session.end)}
+                </p>
+              </div>
+            </div>
+            <Select
+              label="Coach sesi"
+              options={[{ value: "", label: "— Tanpa coach —" }, ...coachOptions]}
+              value={selected.session.coachId ?? ""}
+              clearable={false}
+              onChange={(value) => void reassign(selected.session.id, (value as string) || null)}
+            />
+          </div>
+        )}
+      </ModalDialog>
     </div>
   );
 };
@@ -326,10 +491,9 @@ const ScheduleBuilder: React.FC<{
   packages: PackageRecord[];
   members: { id: string; name: string; phone: string }[];
   coaches: CoachRecord[];
-  coachOptions: { value: string; label: string }[];
   onCancel: () => void;
   onSaved: () => void;
-}> = ({ packages, members, coaches, coachOptions, onCancel, onSaved }) => {
+}> = ({ packages, members, coaches, onCancel, onSaved }) => {
   const toast = useToast();
 
   const [memberId, setMemberId] = useState("");

@@ -3,11 +3,10 @@
 // mutation server actions call to HARD-ENFORCE RBAC (UI gating alone is not
 // security). Superadmin bypasses; every other role is governed by m_role_menu.
 
-import { cookies } from "next/headers";
 import { masterPrisma } from "@/lib/master-db";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
+import { readVerifiedSession } from "@/lib/session";
 
 export type AccessAction =
   | "view"
@@ -40,14 +39,7 @@ export type RoleMenuFlags = {
 
 /** Read the current session from the cookie (server). */
 export async function readSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
+  return readVerifiedSession();
 }
 
 /** Is this role the platform Super Admin (full bypass)? */

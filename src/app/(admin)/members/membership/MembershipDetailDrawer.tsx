@@ -88,7 +88,7 @@ const MembershipDetailDrawer: React.FC<Props> = ({ memberId, isOpen, onClose, on
     [overview, targetPlanId],
   );
 
-  const joinFee = targetPlan?.joinFee ?? 0;
+  const joinFee = action ? targetPlan?.joinFee ?? 0 : 0;
   const change = method === "Cash" ? Math.max(0, cashReceived - joinFee) : 0;
   const cashShort = method === "Cash" && cashReceived < joinFee;
 
@@ -127,7 +127,7 @@ const MembershipDetailDrawer: React.FC<Props> = ({ memberId, isOpen, onClose, on
       return;
     }
     toast.success(
-      action === "assign" ? "Plan di-assign." : action === "extend" ? "Membership diperpanjang." : "Membership di-upgrade.",
+      action === "assign" ? "Plan di-assign." : action === "extend" ? "Member berhasil join ulang." : "Membership di-upgrade.",
       res.change && res.change > 0 ? `Kembalian ${idr(res.change)}` : "Tersimpan",
     );
     closeAction();
@@ -206,7 +206,7 @@ const MembershipDetailDrawer: React.FC<Props> = ({ memberId, isOpen, onClose, on
               {hasPlan && canUpdate && (
                 <>
                   <Button size="sm" variant="outline" onClick={() => openAction("extend")}>
-                    Perpanjang
+                    Join Ulang
                   </Button>
                   <Button size="sm" variant="soft" onClick={() => openAction("upgrade")}>
                     Upgrade
@@ -260,7 +260,7 @@ const MembershipDetailDrawer: React.FC<Props> = ({ memberId, isOpen, onClose, on
       <ModalDialog
         isOpen={!!action}
         onClose={closeAction}
-        title={action === "assign" ? "Assign Plan" : action === "extend" ? "Perpanjang Membership" : "Upgrade Membership"}
+        title={action === "assign" ? "Assign Plan" : action === "extend" ? "Join Ulang Membership" : "Upgrade Membership"}
         size="sm"
         footer={
           <div className="flex justify-end gap-2">
@@ -281,7 +281,7 @@ const MembershipDetailDrawer: React.FC<Props> = ({ memberId, isOpen, onClose, on
           )}
           {action === "extend" && (
             <p className="rounded-xl bg-[var(--surface-muted)] p-3 text-xs text-[var(--text-caption)]">
-              Perpanjang mereset siklus dan mengembalikan kuota penuh untuk plan {status?.planName}.
+              Join ulang mengenakan join fee dan memulai periode baru dengan kuota penuh untuk plan {status?.planName}.
             </p>
           )}
 

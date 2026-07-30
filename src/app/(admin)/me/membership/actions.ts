@@ -7,25 +7,24 @@
 // the desk). All writes route through the shared checkout-core so history +
 // payment are recorded consistently. RBAC is enforced here.
 
-import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { NOT_DELETED } from "@/lib/audit";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { runCheckout, MEMBER_NON_CASH, type PayMethod } from "@/lib/checkout-core";
+import {
+  buildMidtransOrderId,
+  createMidtransSnapTransaction,
+  getMidtransTransactionStatus,
+  isMidtransPaymentSettled,
+  midtransOrderBelongsToCompany,
+} from "@/lib/midtrans";
+import { resolveMidtransConfig } from "@/lib/midtrans-config";
 
 async function requireMemberSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    const s = JSON.parse(raw) as AuthSession;
-    return s.role === "member" ? s : null;
-  } catch {
-    return null;
-  }
+  const session = await readSession();
+  return session?.role === "member" ? session : null;
 }
 
 export type MyPlanOption = {
@@ -51,6 +50,7 @@ export type MyMembershipStatus = {
   joinFee: number;
   resetAt: string | null;
   cycleStart: string | null;
+  active: boolean;
 };
 
 export type MyMembershipHistoryRow = {
@@ -91,13 +91,18 @@ export async function getMyMembershipAction(): Promise<MyMembershipData | null> 
     joinFee: 0,
     resetAt: null,
     cycleStart: null,
+    active: false,
   };
   if (m?.plan && m.plan.isDeleted === 0) {
     let used = m.quotaUsed;
+    let active = true;
     let resetAt: string | null = null;
     if (m.plan.resetPeriodDays > 0 && m.cycleStart) {
       const elapsed = Math.floor((Date.now() - m.cycleStart.getTime()) / 86_400_000);
-      if (elapsed >= m.plan.resetPeriodDays) used = 0;
+      if (elapsed >= m.plan.resetPeriodDays) {
+        used = m.plan.includedCourtBookings;
+        active = false;
+      }
       const next = new Date(m.cycleStart);
       next.setDate(next.getDate() + m.plan.resetPeriodDays);
       resetAt = next.toISOString().slice(0, 10);
@@ -108,10 +113,11 @@ export async function getMyMembershipAction(): Promise<MyMembershipData | null> 
       planColor: m.plan.color,
       quotaTotal: m.plan.includedCourtBookings,
       quotaRemaining: Math.max(0, m.plan.includedCourtBookings - used),
-      courtDiscountPct: m.plan.courtDiscountPct,
+      courtDiscountPct: active ? m.plan.courtDiscountPct : 0,
       joinFee: m.plan.joinFee,
       resetAt,
       cycleStart: m.cycleStart ? m.cycleStart.toISOString() : null,
+      active,
     };
   }
 
@@ -158,15 +164,16 @@ export type MyMembershipActionResult = {
   joinFee?: number;
 };
 
-type BuyInput = { planId: string; method: PayMethod };
-type ExtendInput = { method: PayMethod };
-type UpgradeInput = { planId: string; method: PayMethod };
+type BuyInput = { planId: string; method: PayMethod; providerOrderId?: string };
+type ExtendInput = { method: PayMethod; providerOrderId?: string };
+type UpgradeInput = { planId: string; method: PayMethod; providerOrderId?: string };
 
 /** Shared guard + execution for member-initiated membership actions. */
 async function runMemberMembership(
   planAction: "assign" | "extend" | "upgrade",
   planId: string,
   method: PayMethod,
+  providerOrderId?: string,
 ): Promise<MyMembershipActionResult> {
   const guard = await requirePermission("portal.membership", "create");
   if (!guard.ok) return { success: false, error: guard.error };
@@ -183,6 +190,40 @@ async function runMemberMembership(
     where: { id: session.id, companyId: session.companyId, ...NOT_DELETED },
   });
   if (!member) return { success: false, error: "Member tidak ditemukan." };
+  const plan = await db.m_membership_plan.findFirst({
+    where: {
+      id: planId,
+      companyId: session.companyId,
+      active: true,
+      ...NOT_DELETED,
+    },
+  });
+  if (!plan) return { success: false, error: "Plan tidak ditemukan." };
+  let verifiedAmount: number | undefined;
+  if (plan.joinFee > 0) {
+    if (
+      !providerOrderId ||
+      !midtransOrderBelongsToCompany(providerOrderId, session.companyId)
+    ) {
+      return { success: false, error: "Referensi pembayaran Midtrans tidak valid." };
+    }
+    try {
+      const config = await resolveMidtransConfig(db, session.companyId);
+      const status = await getMidtransTransactionStatus(config, providerOrderId);
+      verifiedAmount = Number(status.gross_amount);
+      if (
+        status.order_id !== providerOrderId ||
+        !isMidtransPaymentSettled(status) ||
+        !Number.isSafeInteger(verifiedAmount) ||
+        verifiedAmount !== plan.joinFee
+      ) {
+        return { success: false, error: "Pembayaran Midtrans belum lunas atau nominal tidak sesuai." };
+      }
+    } catch (err) {
+      console.error("[runMemberMembership] Midtrans verification:", err);
+      return { success: false, error: "Status pembayaran Midtrans belum dapat diverifikasi." };
+    }
+  }
 
   const result = await runCheckout(db, {
     companyId: session.companyId,
@@ -191,6 +232,8 @@ async function runMemberMembership(
     memberId: member.id, // own-account: always the session member
     customerName: member.name,
     membership: { planId, action: planAction },
+    providerConfirmationId: providerOrderId,
+    expectedProviderAmount: verifiedAmount,
   });
 
   if (!result.success) return { success: false, error: result.error };
@@ -213,7 +256,7 @@ export async function buyMyMembershipAction(input: BuyInput): Promise<MyMembersh
   if (m?.planId) {
     return { success: false, error: "Anda sudah memiliki plan. Gunakan Perpanjang atau Upgrade." };
   }
-  return runMemberMembership("assign", input.planId, input.method);
+  return runMemberMembership("assign", input.planId, input.method, input.providerOrderId);
 }
 
 /** Extend the current plan (same plan, reset cycle + full quota). */
@@ -228,7 +271,7 @@ export async function extendMyMembershipAction(input: ExtendInput): Promise<MyMe
   if (!m?.planId) {
     return { success: false, error: "Anda belum memiliki plan untuk diperpanjang." };
   }
-  return runMemberMembership("extend", m.planId, input.method);
+  return runMemberMembership("extend", m.planId, input.method, input.providerOrderId);
 }
 
 /** Upgrade to a different plan (replace plan, forfeit remaining quota). */
@@ -246,5 +289,62 @@ export async function upgradeMyMembershipAction(input: UpgradeInput): Promise<My
   if (m.planId === input.planId) {
     return { success: false, error: "Pilih plan yang berbeda untuk upgrade." };
   }
-  return runMemberMembership("upgrade", input.planId, input.method);
+  return runMemberMembership("upgrade", input.planId, input.method, input.providerOrderId);
+}
+
+export async function startMyMembershipMidtransAction(input: {
+  kind: "buy" | "extend" | "upgrade";
+  planId?: string;
+  method: PayMethod;
+}): Promise<{
+  success: boolean;
+  error?: string;
+  free?: boolean;
+  token?: string;
+  orderId?: string;
+  clientKey?: string;
+  production?: boolean;
+}> {
+  const guard = await requirePermission("portal.membership", "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
+  if (session.role !== "member") return { success: false, error: "Sesi member tidak valid." };
+  try {
+    const db = await getTenantDb(session.dbConfig);
+    const member = await db.t_member.findFirst({
+      where: { id: session.id, companyId: session.companyId, ...NOT_DELETED },
+      select: { planId: true, name: true, email: true, phone: true },
+    });
+    if (!member) return { success: false, error: "Member tidak ditemukan." };
+    const planId = input.kind === "extend" ? member.planId : input.planId;
+    if (!planId) return { success: false, error: "Plan tidak ditemukan." };
+    const plan = await db.m_membership_plan.findFirst({
+      where: { id: planId, companyId: session.companyId, active: true, ...NOT_DELETED },
+    });
+    if (!plan) return { success: false, error: "Plan tidak ditemukan." };
+    if (plan.joinFee === 0) return { success: true, free: true };
+    const config = await resolveMidtransConfig(db, session.companyId);
+    const orderId = buildMidtransOrderId(session.companyId);
+    const snap = await createMidtransSnapTransaction(config, {
+      orderId,
+      grossAmount: plan.joinFee,
+      customer: { firstName: member.name, email: member.email, phone: member.phone },
+      itemDetails: [{
+        id: `MEMBERSHIP-${plan.id.slice(0, 24)}`,
+        name: `Join membership ${plan.name}`.slice(0, 50),
+        price: plan.joinFee,
+        quantity: 1,
+      }],
+    });
+    return {
+      success: true,
+      token: snap.token,
+      orderId,
+      clientKey: config.clientKey,
+      production: config.production,
+    };
+  } catch (err) {
+    console.error("[startMyMembershipMidtransAction] error:", err);
+    return { success: false, error: "Gagal memulai pembayaran Midtrans membership." };
+  }
 }

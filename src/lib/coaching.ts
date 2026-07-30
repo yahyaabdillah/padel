@@ -58,6 +58,42 @@ export interface CoachingCycle {
   durationMin: number;
 }
 
+export type CoachingCycleValidation = { ok: true } | { ok: false; error: string };
+
+/** Validate cycle data at the boundary before it reaches schedule generation. */
+export function validateCoachingCycle(cycle: CoachingCycle): CoachingCycleValidation {
+  if (!cycle || !Array.isArray(cycle.slots) || cycle.slots.length === 0) {
+    return { ok: false, error: "Pilih minimal satu hari dalam siklus." };
+  }
+  if (!Number.isInteger(cycle.durationMin) || cycle.durationMin < 15 || cycle.durationMin > 24 * 60) {
+    return { ok: false, error: "Durasi sesi harus antara 15 dan 1440 menit." };
+  }
+  const seen = new Set<number>();
+  for (const slot of cycle.slots) {
+    if (!Number.isInteger(slot.day) || slot.day < 0 || slot.day > 6 || seen.has(slot.day)) {
+      return { ok: false, error: "Hari pada siklus tidak valid atau duplikat." };
+    }
+    seen.add(slot.day);
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(slot.time)) {
+      return { ok: false, error: "Format waktu sesi harus HH:MM." };
+    }
+  }
+  return { ok: true };
+}
+
+/** Number of package sessions covered by the member's free-coaching benefit. */
+export function coachingQuotaForSchedule(input: {
+  freeCoaching: number;
+  coachingUsed: number;
+  sessionCount: number;
+}): { consumed: number; paid: number } {
+  const free = Math.max(0, Math.floor(input.freeCoaching));
+  const used = Math.max(0, Math.floor(input.coachingUsed));
+  const sessions = Math.max(0, Math.floor(input.sessionCount));
+  const consumed = Math.min(Math.max(free - used, 0), sessions);
+  return { consumed, paid: sessions - consumed };
+}
+
 export const WEEKDAY_LABELS = [
   "Minggu",
   "Senin",

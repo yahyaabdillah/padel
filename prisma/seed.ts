@@ -2,7 +2,10 @@
 // Run: npm run db:seed
 import * as bcrypt from "bcryptjs";
 import { PrismaClient as MasterClient } from "@prisma/master-client";
-import { PrismaClient as TenantClient } from "@prisma/tenant-client";
+import {
+  Prisma as TenantPrisma,
+  PrismaClient as TenantClient,
+} from "@prisma/tenant-client";
 import { MENU_CATALOG, MENU_ACTIONS } from "../src/data/padel/menu-catalog";
 
 const master = new MasterClient();
@@ -341,7 +344,7 @@ async function seedTenant() {
           pricePeak: c.pricePeak,
           color: c.color,
           note: c.note,
-          schedule: c.schedule as any, // Prisma Json
+          schedule: c.schedule as TenantPrisma.InputJsonValue,
           createdBy: "seed",
         },
       });

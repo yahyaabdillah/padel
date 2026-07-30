@@ -31,11 +31,20 @@ async function main() {
   const coachingSchedule = await tenant.t_coaching_schedule.deleteMany({});
   console.log(`   t_coaching_schedule: ${coachingSchedule.count} removed`);
 
+  const refund = await tenant.t_refund.deleteMany({});
+  console.log(`   t_refund:            ${refund.count} removed`);
+
   const detail = await tenant.t_booking_detail.deleteMany({});
   console.log(`   t_booking_detail:    ${detail.count} removed`);
 
   const booking = await tenant.t_booking.deleteMany({});
   console.log(`   t_booking:           ${booking.count} removed`);
+
+  const posItems = await tenant.t_pos_sale_item.deleteMany({});
+  console.log(`   t_pos_sale_item:     ${posItems.count} removed`);
+
+  const posSales = await tenant.t_pos_sale.deleteMany({});
+  console.log(`   t_pos_sale:          ${posSales.count} removed`);
 
   const payment = await tenant.t_payment.deleteMany({});
   console.log(`   t_payment:           ${payment.count} removed`);

@@ -22,12 +22,51 @@ import {
   buyMyMembershipAction,
   extendMyMembershipAction,
   upgradeMyMembershipAction,
+  startMyMembershipMidtransAction,
   type MyMembershipData,
   type MyPlanOption,
 } from "../actions";
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+
+type SnapCallbacks = {
+  onSuccess: () => void;
+  onPending: () => void;
+  onError: () => void;
+  onClose: () => void;
+};
+
+declare global {
+  interface Window {
+    snap?: { pay: (token: string, callbacks: SnapCallbacks) => void };
+  }
+}
+
+async function loadMidtransSnap(clientKey: string, production: boolean) {
+  const source = `${production ? "https://app.midtrans.com" : "https://app.sandbox.midtrans.com"}/snap/snap.js`;
+  const existing = document.querySelector<HTMLScriptElement>(
+    "script[data-padel-midtrans]",
+  );
+  if (
+    existing &&
+    existing.src === source &&
+    existing.dataset.clientKey === clientKey &&
+    window.snap
+  ) return;
+  existing?.remove();
+  await new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = source;
+    script.async = true;
+    script.dataset.padelMidtrans = "true";
+    script.dataset.clientKey = clientKey;
+    script.setAttribute("data-client-key", clientKey);
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Midtrans Snap gagal dimuat."));
+    document.head.appendChild(script);
+  });
+}
 
 type PendingAction =
   | { kind: "buy"; plan: MyPlanOption }
@@ -55,6 +94,7 @@ export default function ManageMembershipPage() {
 
   const status = data?.status;
   const hasPlan = !!status?.planId;
+  const pendingFee = pending?.plan.joinFee ?? 0;
 
   const openAction = (kind: PendingAction["kind"], plan: MyPlanOption) => {
     setPending({ kind, plan } as PendingAction);
@@ -64,30 +104,73 @@ export default function ManageMembershipPage() {
   const confirm = async () => {
     if (!pending || saving) return;
     setSaving(true);
-    let res: { success: boolean; error?: string };
-    if (pending.kind === "buy") {
-      res = await buyMyMembershipAction({ planId: pending.plan.id, method });
-    } else if (pending.kind === "extend") {
-      res = await extendMyMembershipAction({ method });
-    } else {
-      res = await upgradeMyMembershipAction({ planId: pending.plan.id, method });
-    }
-    setSaving(false);
-    if (!res.success) {
-      toast.error(res.error || "Gagal memproses membership.");
+    const selected = pending;
+    const finish = async (providerOrderId?: string) => {
+      let res: { success: boolean; error?: string };
+      if (selected.kind === "buy") {
+        res = await buyMyMembershipAction({
+          planId: selected.plan.id,
+          method,
+          providerOrderId,
+        });
+      } else if (selected.kind === "extend") {
+        res = await extendMyMembershipAction({ method, providerOrderId });
+      } else {
+        res = await upgradeMyMembershipAction({
+          planId: selected.plan.id,
+          method,
+          providerOrderId,
+        });
+      }
+      setSaving(false);
+      if (!res.success) {
+        toast.error(res.error || "Gagal memproses membership.");
+        return;
+      }
+      toast.success(
+        selected.kind === "buy"
+          ? "Membership aktif!"
+          : selected.kind === "extend"
+            ? "Berhasil join ulang!"
+            : "Membership di-upgrade!",
+        "Berhasil",
+      );
+      setPending(null);
+      router.push("/me/membership");
+    };
+    if (pendingFee === 0) {
+      await finish();
       return;
     }
-    toast.success(
-      pending.kind === "buy"
-        ? "Membership aktif!"
-        : pending.kind === "extend"
-          ? "Membership diperpanjang!"
-          : "Membership di-upgrade!",
-      "Berhasil",
-    );
-    setPending(null);
-    // back to the overview so the updated status is visible
-    router.push("/me/membership");
+    const started = await startMyMembershipMidtransAction({
+      kind: selected.kind,
+      planId: selected.plan.id,
+      method,
+    });
+    if (!started.success || !started.token || !started.orderId || !started.clientKey) {
+      setSaving(false);
+      toast.error(started.error || "Gagal memulai Midtrans.");
+      return;
+    }
+    try {
+      await loadMidtransSnap(started.clientKey, Boolean(started.production));
+      if (!window.snap) throw new Error("Midtrans Snap tidak tersedia.");
+      window.snap.pay(started.token, {
+        onSuccess: () => void finish(started.orderId),
+        onPending: () => {
+          setSaving(false);
+          toast.info("Pembayaran masih pending.", "Midtrans");
+        },
+        onError: () => {
+          setSaving(false);
+          toast.error("Pembayaran Midtrans gagal.");
+        },
+        onClose: () => setSaving(false),
+      });
+    } catch (err) {
+      setSaving(false);
+      toast.error(err instanceof Error ? err.message : "Midtrans Snap gagal dimuat.");
+    }
   };
 
   if (loading || !data || !status) {
@@ -138,8 +221,8 @@ export default function ManageMembershipPage() {
                   <span className="h-3 w-3 rounded-full" style={{ background: p.color }} />
                   <h5 className="text-lg font-bold text-[var(--text-heading)]">{p.name}</h5>
                   {isCurrent && (
-                    <Badge variant="light" color="success" size="sm">
-                      Aktif
+                    <Badge variant="light" color={status.active ? "success" : "warning"} size="sm">
+                      {status.active ? "Aktif" : "Berakhir"}
                     </Badge>
                   )}
                 </div>
@@ -183,7 +266,7 @@ export default function ManageMembershipPage() {
                     </Button>
                   ) : isCurrent ? (
                     <Button fullWidth variant="outline" onClick={() => openAction("extend", p)}>
-                      Perpanjang
+                      Join Ulang
                     </Button>
                   ) : (
                     <Button fullWidth variant="soft" onClick={() => openAction("upgrade", p)}>
@@ -205,7 +288,7 @@ export default function ManageMembershipPage() {
           pending?.kind === "buy"
             ? `Beli ${pending.plan.name}`
             : pending?.kind === "extend"
-              ? `Perpanjang ${pending.plan.name}`
+              ? `Join Ulang ${pending.plan.name}`
               : `Upgrade ke ${pending?.plan.name}`
         }
         size="sm"
@@ -217,8 +300,8 @@ export default function ManageMembershipPage() {
             <Button onClick={confirm} glow disabled={saving}>
               {saving
                 ? "Memproses…"
-                : (pending?.plan.joinFee ?? 0) > 0
-                  ? `Bayar ${idr(pending?.plan.joinFee ?? 0)}`
+                : pendingFee > 0
+                  ? `Bayar ${idr(pendingFee)}`
                   : "Konfirmasi"}
             </Button>
           </div>
@@ -233,7 +316,7 @@ export default function ManageMembershipPage() {
             )}
             {pending.kind === "extend" && (
               <p className="rounded-xl bg-[var(--surface-muted)] p-3 text-xs text-[var(--text-caption)]">
-                Perpanjang akan mereset siklus dan mengembalikan kuota penuh.
+                Join ulang memulai periode baru, mengenakan join fee, dan mengembalikan kuota penuh.
               </p>
             )}
 
@@ -257,14 +340,14 @@ export default function ManageMembershipPage() {
                 ))}
               </div>
               <p className="mt-2 text-xs text-[var(--text-muted)]">
-                Pembayaran tunai hanya tersedia di front desk (lewat staff).
+                 Pembayaran diproses dan diverifikasi melalui Midtrans.
               </p>
             </div>
 
             <div className="flex items-center justify-between border-t border-[var(--border-light)] pt-3">
               <span className="font-medium text-[var(--text-heading)]">Total</span>
               <span className="text-lg font-bold text-[var(--color-primary)]">
-                {pending.plan.joinFee > 0 ? idr(pending.plan.joinFee) : "Gratis"}
+                {pendingFee > 0 ? idr(pendingFee) : "Gratis"}
               </span>
             </div>
           </div>

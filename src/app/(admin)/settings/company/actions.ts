@@ -5,29 +5,19 @@
 // timezone) plus the check-in operational settings (scanStaffBooking,
 // strictWindow, checkinWindowMin). One m_company row per companyId.
 
-import { cookies } from "next/headers";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { getTenantDb } from "@/lib/tenant-db";
 import { masterPrisma } from "@/lib/master-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { auditCreate, auditUpdate, NOT_DELETED } from "@/lib/audit";
 import { DEFAULT_CHECKIN_SETTINGS } from "@/lib/checkin-core";
-
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
+import {
+  encryptPaymentSecret,
+  getPaymentEncryptionKey,
+} from "@/lib/payment-config-crypto";
 
 export type CompanyProfile = {
   name: string;
@@ -39,6 +29,12 @@ export type CompanyProfile = {
   scanStaffBooking: boolean;
   strictWindow: boolean;
   checkinWindowMin: number;
+  midtransEnabled: boolean;
+  midtransProduction: boolean;
+  midtransMerchantId: string | null;
+  midtransClientKey: string | null;
+  midtransServerKey: string;
+  midtransServerKeyConfigured: boolean;
 };
 
 export type CompanyInput = {
@@ -51,11 +47,17 @@ export type CompanyInput = {
   scanStaffBooking: boolean;
   strictWindow: boolean;
   checkinWindowMin: number;
+  midtransEnabled: boolean;
+  midtransProduction: boolean;
+  midtransMerchantId?: string | null;
+  midtransClientKey?: string | null;
+  /** Empty means preserve the existing encrypted server key. */
+  midtransServerKey?: string;
 };
 
 /** Load the company profile for the active tenant, or safe defaults. */
 export async function getCompanyAction(): Promise<CompanyProfile> {
-  const session = await requireSession();
+  const session = await readSession();
   const fallbackName = "PadelHub";
 
   if (!session) {
@@ -66,6 +68,12 @@ export async function getCompanyAction(): Promise<CompanyProfile> {
       phone: null,
       email: null,
       ...DEFAULT_CHECKIN_SETTINGS,
+      midtransEnabled: false,
+      midtransProduction: false,
+      midtransMerchantId: null,
+      midtransClientKey: null,
+      midtransServerKey: "",
+      midtransServerKeyConfigured: false,
     };
   }
 
@@ -85,6 +93,12 @@ export async function getCompanyAction(): Promise<CompanyProfile> {
         scanStaffBooking: row.scanStaffBooking,
         strictWindow: row.strictWindow,
         checkinWindowMin: row.checkinWindowMin,
+        midtransEnabled: row.midtransEnabled,
+        midtransProduction: row.midtransProduction,
+        midtransMerchantId: row.midtransMerchantId,
+        midtransClientKey: row.midtransClientKey,
+        midtransServerKey: "",
+        midtransServerKeyConfigured: Boolean(row.midtransServerKeyEncrypted),
       };
     }
   } catch (err) {
@@ -109,12 +123,18 @@ export async function getCompanyAction(): Promise<CompanyProfile> {
     phone: null,
     email: null,
     ...DEFAULT_CHECKIN_SETTINGS,
+    midtransEnabled: false,
+    midtransProduction: false,
+    midtransMerchantId: null,
+    midtransClientKey: null,
+    midtransServerKey: "",
+    midtransServerKeyConfigured: false,
   };
 }
 
 /** Lightweight branding (name + logo) for the sidebar/header. */
 export async function getCompanyBrandingAction(): Promise<{ name: string; logo: string | null }> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return { name: "PadelHub", logo: null };
   try {
     const db = await getTenantDb(session.dbConfig);
@@ -161,6 +181,22 @@ export async function saveCompanyAction(
       where: { companyId: session.companyId, ...NOT_DELETED },
     });
 
+    const merchantId = input.midtransMerchantId?.trim() || null;
+    const clientKey = input.midtransClientKey?.trim() || null;
+    const suppliedServerKey = input.midtransServerKey?.trim() || "";
+    const serverKeyEncrypted = suppliedServerKey
+      ? encryptPaymentSecret(suppliedServerKey, getPaymentEncryptionKey())
+      : existing?.midtransServerKeyEncrypted ?? null;
+    if (
+      input.midtransEnabled &&
+      (!merchantId || !clientKey || !serverKeyEncrypted)
+    ) {
+      return {
+        success: false,
+        error: "Merchant ID, Client Key, dan Server Key Midtrans wajib diisi.",
+      };
+    }
+
     const data = {
       name: input.name.trim(),
       address: input.address?.trim() || null,
@@ -171,6 +207,11 @@ export async function saveCompanyAction(
       scanStaffBooking: Boolean(input.scanStaffBooking),
       strictWindow: Boolean(input.strictWindow),
       checkinWindowMin: windowMin,
+      midtransEnabled: Boolean(input.midtransEnabled),
+      midtransProduction: Boolean(input.midtransProduction),
+      midtransMerchantId: merchantId,
+      midtransClientKey: clientKey,
+      midtransServerKeyEncrypted: serverKeyEncrypted,
     };
 
     if (existing) {

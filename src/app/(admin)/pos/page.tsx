@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ShoppingCart, Boxes } from "lucide-react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
 import { formatIDR } from "@/components/club-engage/format";
@@ -15,7 +15,6 @@ import PromoReferralInput from "@/components/shared/PromoReferralInput";
 import ProductManagementPanel from "@/components/pos/ProductManagementPanel";
 import ProductFormDrawer from "@/components/pos/ProductFormDrawer";
 import {
-  products as seedProducts,
   productCategories,
   paymentMethods,
   isProductActive,
@@ -23,6 +22,12 @@ import {
   type ProductCategory,
   type PaymentMethod,
 } from "@/data/padel/engage/products";
+import {
+  checkoutPosAction,
+  getPosProductsAction,
+  savePosProductAction,
+  startPosMidtransAction,
+} from "./actions";
 
 interface CartLine {
   product: Product;
@@ -45,12 +50,54 @@ interface Receipt {
 
 const TAX_RATE = 0.11;
 
+type SnapCallbacks = {
+  onSuccess: () => void;
+  onPending: () => void;
+  onError: () => void;
+  onClose: () => void;
+};
+
+declare global {
+  interface Window {
+    snap?: { pay: (token: string, callbacks: SnapCallbacks) => void };
+  }
+}
+
+async function loadMidtransSnap(clientKey: string, production: boolean) {
+  const source = `${production ? "https://app.midtrans.com" : "https://app.sandbox.midtrans.com"}/snap/snap.js`;
+  const existing = document.querySelector<HTMLScriptElement>(
+    "script[data-padel-midtrans]",
+  );
+  if (
+    existing &&
+    existing.src === source &&
+    existing.dataset.clientKey === clientKey &&
+    window.snap
+  ) {
+    return;
+  }
+  existing?.remove();
+  await new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = source;
+    script.async = true;
+    script.dataset.padelMidtrans = "true";
+    script.dataset.clientKey = clientKey;
+    script.setAttribute("data-client-key", clientKey);
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Midtrans Snap gagal dimuat."));
+    document.head.appendChild(script);
+  });
+}
+
 export default function POSPage() {
   const toast = useToast();
   const { currentUser } = useRole();
 
   // ── Master product list (lives in page state; persists across tab switches) ──
-  const [productList, setProductList] = useState<Product[]>(seedProducts);
+  const [productList, setProductList] = useState<Product[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+  const [checkingOut, setCheckingOut] = useState(false);
 
   const [tab, setTab] = useState<"sell" | "manage">("sell");
 
@@ -70,6 +117,15 @@ export default function POSPage() {
   // ── Product management drawer ──
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
+
+  const loadProducts = useCallback(async () => {
+    setProductList(await getPosProductsAction());
+    setLoadingProducts(false);
+  }, []);
+
+  useEffect(() => {
+    void loadProducts();
+  }, [loadProducts]);
 
   const lowStockCount = useMemo(
     () => productList.filter((p) => p.stock !== -1 && p.stock > 0 && p.stock <= 5).length,
@@ -130,43 +186,96 @@ export default function POSPage() {
     setCheckoutOpen(true);
   };
 
-  const handleCheckout = () => {
-    const paidNum = method === "Cash" ? parseInt(paid.replace(/\D/g, ""), 10) || 0 : total;
+  const handleCheckout = async () => {
+    if (checkingOut || cart.length === 0) return;
+    const paidNum =
+      method === "Cash" ? parseInt(paid.replace(/\D/g, ""), 10) || 0 : total;
     if (method === "Cash" && paidNum < total) {
       toast.warning("Cash received is less than total.");
       return;
     }
-    const now = new Date();
-    const r: Receipt = {
-      no: `RCP-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(Math.floor(Math.random() * 900) + 100)}`,
-      lines: cart,
-      subtotal,
-      discount,
-      promoCode: discount > 0 ? promoCode : undefined,
-      tax,
-      total,
+    setCheckingOut(true);
+    const input = {
+      lines: cart.map((line) => ({
+        productId: line.product.id,
+        quantity: line.qty,
+      })),
       method,
-      paid: paidNum,
-      change: Math.max(0, paidNum - total),
-      time: now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+      cashReceived: method === "Cash" ? paidNum : undefined,
+      promoCode: promoCode || undefined,
     };
 
-    // Decrement tracked stock for sold lines.
-    setProductList((prev) =>
-      prev.map((p) => {
-        const line = cart.find((l) => l.product.id === p.id);
-        if (!line || p.stock === -1) return p;
-        return { ...p, stock: Math.max(0, p.stock - line.qty) };
-      }),
-    );
+    const finish = async (providerOrderId?: string) => {
+      const result = await checkoutPosAction({ ...input, providerOrderId });
+      setCheckingOut(false);
+      if (!result.success || !result.receipt) {
+        toast.error(result.error || "Gagal menyelesaikan transaksi POS.");
+        return;
+      }
+      const serverReceipt = result.receipt;
+      const now = new Date();
+      setReceipt({
+        no: serverReceipt.receiptNo,
+        lines: cart,
+        subtotal: serverReceipt.subtotal,
+        discount: serverReceipt.discount,
+        promoCode:
+          serverReceipt.discount > 0 && promoCode ? promoCode : undefined,
+        tax: serverReceipt.tax,
+        total: serverReceipt.total,
+        method,
+        paid: serverReceipt.paid,
+        change: serverReceipt.change,
+        time: now.toLocaleTimeString("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      });
+      setCheckoutOpen(false);
+      setCart([]);
+      setPaid("");
+      setPromoDiscount(0);
+      setPromoCode("");
+      await loadProducts();
+      toast.success(`Sale completed · ${formatIDR(serverReceipt.total)}`);
+    };
 
-    setReceipt(r);
-    setCheckoutOpen(false);
-    setCart([]);
-    setPaid("");
-    setPromoDiscount(0);
-    setPromoCode("");
-    toast.success(`Sale completed · ${formatIDR(total)}`);
+    if (method === "Cash") {
+      await finish();
+      return;
+    }
+    const started = await startPosMidtransAction(input);
+    if (
+      !started.success ||
+      !started.token ||
+      !started.orderId ||
+      !started.clientKey
+    ) {
+      setCheckingOut(false);
+      toast.error(started.error || "Gagal memulai Midtrans.");
+      return;
+    }
+    try {
+      await loadMidtransSnap(started.clientKey, Boolean(started.production));
+      if (!window.snap) throw new Error("Midtrans Snap tidak tersedia.");
+      window.snap.pay(started.token, {
+        onSuccess: () => void finish(started.orderId),
+        onPending: () => {
+          setCheckingOut(false);
+          toast.info("Pembayaran POS masih pending.", "Midtrans");
+        },
+        onError: () => {
+          setCheckingOut(false);
+          toast.error("Pembayaran POS gagal.");
+        },
+        onClose: () => setCheckingOut(false),
+      });
+    } catch (err) {
+      setCheckingOut(false);
+      toast.error(
+        err instanceof Error ? err.message : "Midtrans Snap gagal dimuat.",
+      );
+    }
   };
 
   // ── Product management ops ──
@@ -180,25 +289,48 @@ export default function POSPage() {
     setFormOpen(true);
   };
 
-  const handleSubmitProduct = (product: Product) => {
+  const handleSubmitProduct = async (product: Product) => {
+    const result = await savePosProductAction(product);
+    if (!result.success || !result.product) {
+      toast.error(result.error || "Gagal menyimpan produk.");
+      return;
+    }
     setProductList((prev) => {
-      const exists = prev.some((p) => p.id === product.id);
-      return exists ? prev.map((p) => (p.id === product.id ? product : p)) : [product, ...prev];
+      const exists = prev.some((p) => p.id === result.product!.id);
+      return exists
+        ? prev.map((p) => (p.id === result.product!.id ? result.product! : p))
+        : [result.product!, ...prev];
     });
     toast.success(editing ? "Product updated." : "Product added.");
   };
 
-  const handleRestock = (id: string, qty: number) => {
-    setProductList((prev) =>
-      prev.map((p) => (p.id === id && p.stock !== -1 ? { ...p, stock: p.stock + qty } : p)),
-    );
+  const handleRestock = async (id: string, qty: number) => {
+    const product = productList.find((item) => item.id === id);
+    if (!product || product.stock === -1) return;
+    const result = await savePosProductAction({
+      ...product,
+      stock: product.stock + qty,
+    });
+    if (!result.success) {
+      toast.error(result.error || "Gagal memperbarui stok.");
+      return;
+    }
+    await loadProducts();
     toast.success(`Restocked +${qty}.`);
   };
 
-  const handleToggleActive = (id: string) => {
-    setProductList((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, active: isProductActive(p) ? false : true } : p)),
-    );
+  const handleToggleActive = async (id: string) => {
+    const product = productList.find((item) => item.id === id);
+    if (!product) return;
+    const result = await savePosProductAction({
+      ...product,
+      active: !isProductActive(product),
+    });
+    if (!result.success) {
+      toast.error(result.error || "Gagal mengubah status produk.");
+      return;
+    }
+    await loadProducts();
   };
 
   const cartPanel = (
@@ -295,7 +427,9 @@ export default function POSPage() {
                 ))}
               </div>
 
-              {filtered.length === 0 ? (
+              {loadingProducts ? (
+                <div className="h-48 animate-pulse rounded-2xl bg-[var(--surface-muted)]" />
+              ) : filtered.length === 0 ? (
                 <EmptyState title="No products found" description="Try a different category or search term." />
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
@@ -368,7 +502,14 @@ export default function POSPage() {
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setCheckoutOpen(false)}>Cancel</Button>
-            <Button variant="primary" sheen onClick={handleCheckout}>Complete Sale</Button>
+            <Button
+              variant="primary"
+              sheen
+              disabled={checkingOut}
+              onClick={() => void handleCheckout()}
+            >
+              {checkingOut ? "Processing…" : "Complete Sale"}
+            </Button>
           </div>
         }
       >

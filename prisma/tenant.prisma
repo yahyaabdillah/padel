@@ -110,6 +110,13 @@ model m_company {
   /// ± tolerance in minutes for the strict window
   checkinWindowMin Int     @default(15)
 
+  // ── Midtrans payment gateway (server key is AES-GCM encrypted) ──
+  midtransEnabled            Boolean @default(false)
+  midtransProduction         Boolean @default(false)
+  midtransMerchantId         String? @db.VarChar(80)
+  midtransClientKey          String? @db.VarChar(160)
+  midtransServerKeyEncrypted String? @db.Text
+
   // ── audit + soft delete ──
   createdAt DateTime  @default(now()) @db.Timestamp(0)
   createdBy String?   @db.VarChar(100)
@@ -246,6 +253,39 @@ model m_membership_plan {
   membershipHistory t_membership_history[]
 
   @@index([companyId])
+  @@index([active])
+  @@index([isDeleted])
+}
+
+/// Product/inventory master for the pro-shop POS.
+model m_product {
+  id        String  @id @default(uuid()) @db.Uuid
+  companyId String  @db.VarChar(50)
+  sku       String  @db.VarChar(50)
+  name      String  @db.VarChar(180)
+  category  String  @db.VarChar(50)
+  brand     String? @db.VarChar(80)
+  price     Int
+  stock     Int     @default(0) // -1 = unlimited
+  emoji     String? @db.VarChar(20)
+  image     String? @db.Text
+  perHour   Boolean @default(false)
+  popular   Boolean @default(false)
+  active    Boolean @default(true)
+
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  saleItems t_pos_sale_item[]
+
+  @@unique([companyId, sku])
+  @@index([companyId])
+  @@index([category])
   @@index([active])
   @@index([isDeleted])
 }
@@ -457,6 +497,7 @@ model t_booking_detail {
 
   booking t_booking @relation(fields: [bookingId], references: [id])
   court   m_court   @relation(fields: [courtId], references: [id])
+  refund  t_refund?
 
   @@index([companyId])
   @@index([bookingId])
@@ -509,6 +550,8 @@ model t_coaching_schedule {
   packageName String @db.VarChar(100)
   totalSessions Int   @default(1)
   price      Int     @default(0)
+  /// number of package sessions covered by the member's free-coaching quota
+  coachingQuotaConsumed Int @default(0)
   /// first session date (YYYY-MM-DD anchor)
   startDate  DateTime @db.Timestamp(0)
   /// weekly cycle: JSON { days:[1,3,5], time:"18:00", durationMin:60, perWeek:3 }
@@ -622,6 +665,7 @@ model t_payment {
   amount           Int @default(0)
   membershipAmount Int @default(0)
   courtAmount      Int @default(0)
+  posAmount        Int @default(0)
   /// paid (always now) | pending | failed | cancelled | refunded
   status      String  @default("paid") @db.VarChar(20)
   /// who paid: member | staff
@@ -647,9 +691,100 @@ model t_payment {
 
   bookings  t_booking[]
   histories t_membership_history[]
+  refunds   t_refund[]
+  posSale   t_pos_sale?
 
   @@unique([companyId, paymentRef])
+  @@unique([companyId, externalId])
   @@index([companyId])
+  @@index([status])
+  @@index([isDeleted])
+}
+
+/// Completed pro-shop checkout. Monetary settlement is stored in t_payment.
+model t_pos_sale {
+  id          String @id @default(uuid()) @db.Uuid
+  companyId   String @db.VarChar(50)
+  receiptNo   String @db.VarChar(50)
+  paymentId   String @unique @db.Uuid
+  customer    String? @db.VarChar(255)
+  subtotal    Int
+  discount    Int    @default(0)
+  tax         Int    @default(0)
+  total       Int
+  promoCode   String? @db.VarChar(50)
+
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  payment t_payment        @relation(fields: [paymentId], references: [id])
+  items   t_pos_sale_item[]
+
+  @@unique([companyId, receiptNo])
+  @@index([companyId])
+  @@index([createdAt])
+  @@index([isDeleted])
+}
+
+/// Immutable line snapshot for a POS sale.
+model t_pos_sale_item {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.VarChar(50)
+  saleId    String @db.Uuid
+  productId String? @db.Uuid
+  sku       String @db.VarChar(50)
+  name      String @db.VarChar(180)
+  unitPrice Int
+  quantity  Int
+  lineTotal Int
+
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  sale    t_pos_sale @relation(fields: [saleId], references: [id])
+  product m_product? @relation(fields: [productId], references: [id])
+
+  @@index([companyId])
+  @@index([saleId])
+  @@index([productId])
+  @@index([isDeleted])
+}
+
+/// Immutable refund ledger. A booking detail can be refunded at most once.
+model t_refund {
+  id              String   @id @default(uuid()) @db.Uuid
+  companyId       String   @db.VarChar(50)
+  paymentId       String   @db.Uuid
+  bookingDetailId String   @unique @db.Uuid
+  amount          Int
+  status          String   @default("pending") @db.VarChar(20) // pending|refunded|failed
+  reason          String?  @db.VarChar(255)
+  providerRef     String?  @db.VarChar(120)
+  refundedAt      DateTime? @db.Timestamp(0)
+
+  createdAt DateTime  @default(now()) @db.Timestamp(0)
+  createdBy String?   @db.VarChar(100)
+  updatedAt DateTime  @updatedAt @db.Timestamp(0)
+  updatedBy String?   @db.VarChar(100)
+  deletedAt DateTime? @db.Timestamp(0)
+  deletedBy String?   @db.VarChar(100)
+  isDeleted Int       @default(0)
+
+  payment      t_payment        @relation(fields: [paymentId], references: [id])
+  bookingDetail t_booking_detail @relation(fields: [bookingDetailId], references: [id])
+
+  @@index([companyId])
+  @@index([paymentId])
   @@index([status])
   @@index([isDeleted])
 }

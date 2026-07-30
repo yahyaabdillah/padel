@@ -835,6 +835,59 @@ span.flatpickr-weekday,
   @apply min-h-screen;
 }
 
+/* Coaching schedule — compact operational planner */
+.coaching-calendar .fc.fc-media-screen {
+  min-height: 0;
+}
+.coaching-calendar .fc .fc-toolbar.fc-header-toolbar {
+  @apply mb-4 px-0 pt-0;
+}
+.coaching-calendar .fc .fc-toolbar-title {
+  @apply !text-base !font-semibold;
+}
+.coaching-calendar .fc-theme-standard th {
+  @apply bg-transparent;
+}
+.coaching-calendar .fc .fc-col-header-cell-cushion {
+  @apply !px-2 !py-3 text-[11px] font-semibold tracking-wide;
+}
+.coaching-calendar .fc .fc-timegrid-slot {
+  height: 2.65rem;
+}
+.coaching-calendar .fc .fc-timegrid-slot-label-cushion {
+  @apply text-xs;
+}
+.coaching-calendar .fc .fc-timegrid-now-indicator-line {
+  @apply border-rose-500;
+}
+.coaching-calendar .fc .fc-timegrid-now-indicator-arrow {
+  @apply border-l-rose-500;
+}
+.coaching-calendar .fc-event {
+  @apply cursor-pointer rounded-lg border-0 shadow-sm transition duration-150 hover:brightness-95 hover:shadow-md;
+}
+.coaching-calendar .fc-timegrid-event .fc-event-main {
+  @apply px-2 py-1.5;
+}
+.coaching-calendar .fc-event-time {
+  @apply text-[10px] font-semibold opacity-85;
+}
+.coaching-calendar .fc-event-title {
+  @apply text-[11px] font-semibold leading-tight;
+}
+.coaching-calendar .coaching-event-no_coach {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 5px,
+    rgb(255 255 255 / 0.18) 5px,
+    rgb(255 255 255 / 0.18) 9px
+  );
+}
+.coaching-calendar .fc-list-event:hover td {
+  @apply bg-gray-50 dark:bg-white/[0.03];
+}
+
 .input-date-icon::-webkit-inner-spin-button,
 .input-date-icon::-webkit-calendar-picker-indicator {
   opacity: 0;

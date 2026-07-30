@@ -7,7 +7,7 @@ import { randomUUID } from "crypto";
 import { getTenantDb } from "@/lib/tenant-db";
 import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
-import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
+import { auditCreate } from "@/lib/audit";
 import { requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";

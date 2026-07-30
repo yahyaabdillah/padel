@@ -9,15 +9,22 @@
 // calcMembershipBenefit and persisted atomically through the shared
 // checkout-core (runCheckout). RBAC is enforced here (the core does not guard).
 
-import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
 import type { AuthSession } from "@/lib/auth-types";
 import { auditUpdate, NOT_DELETED } from "@/lib/audit";
 import { calcMembershipBenefit } from "@/lib/membership-benefit";
-import { requirePermission } from "@/lib/access-guard";
-import { runCheckout, type CheckoutBookingInput } from "@/lib/checkout-core";
+import {
+  canRestoreQuotaForCancellation,
+  quotaUnitsForDuration,
+} from "@/lib/membership-quota";
+import { readSession, requirePermission } from "@/lib/access-guard";
+import {
+  recordBookingRefund,
+  runCheckout,
+  type CheckoutBookingInput,
+  type PayMethod,
+} from "@/lib/checkout-core";
 import { getTimeGroupsAction } from "@/app/(admin)/settings/hours/group-actions";
 import {
   MEMBER_PAYMENT_METHODS,
@@ -31,22 +38,24 @@ import {
   type MeTimeGroup,
   type BookSessionInput,
   type CreateMyBookingInput,
+  type MidtransCheckoutResult,
   type CreateMyBookingResult,
   type PreviewMyBookingResult,
   type PreviewLine,
   type CancelMyBookingResult,
 } from "./types";
+import {
+  buildMidtransOrderId,
+  createMidtransSnapTransaction,
+  getMidtransTransactionStatus,
+  isMidtransPaymentSettled,
+  midtransOrderBelongsToCompany,
+} from "@/lib/midtrans";
+import { resolveMidtransConfig } from "@/lib/midtrans-config";
 
 async function requireMemberSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    const s = JSON.parse(raw) as AuthSession;
-    return s.role === "member" ? s : null;
-  } catch {
-    return null;
-  }
+  const session = await readSession();
+  return session?.role === "member" ? session : null;
 }
 
 /** Page bootstrap: active courts + the member's live membership benefit. */
@@ -184,6 +193,11 @@ async function priceOneSession(
   const schedule = (court.schedule as unknown as DaySchedule[]) ?? [];
   const start = new Date(`${s.dateKey}T${String(s.startHour).padStart(2, "0")}:00:00`);
   const durMin = Math.round(s.durationHours * 60);
+  try {
+    quotaUnitsForDuration(durMin);
+  } catch {
+    return "Durasi booking harus tepat 60 menit.";
+  }
   const end = new Date(start.getTime() + durMin * 60_000);
 
   if (start.getTime() < Date.now()) {
@@ -350,6 +364,44 @@ export async function createMyBookingAction(
   });
   if (!member) return { success: false, error: "Member tidak ditemukan." };
 
+  const preview = await previewMyBookingAction(input);
+  if (!preview.success) return { success: false, error: preview.error };
+  let verifiedProviderAmount: number | undefined;
+  if (preview.payable > 0) {
+    if (
+      !input.providerOrderId ||
+      !midtransOrderBelongsToCompany(input.providerOrderId, session.companyId)
+    ) {
+      return { success: false, error: "Referensi pembayaran Midtrans tidak valid." };
+    }
+    try {
+      const config = await resolveMidtransConfig(db, session.companyId);
+      const status = await getMidtransTransactionStatus(
+        config,
+        input.providerOrderId,
+      );
+      const grossAmount = Number(status.gross_amount);
+      if (
+        status.order_id !== input.providerOrderId ||
+        !isMidtransPaymentSettled(status) ||
+        !Number.isSafeInteger(grossAmount) ||
+        grossAmount !== preview.payable
+      ) {
+        return {
+          success: false,
+          error: "Pembayaran Midtrans belum lunas atau nominalnya tidak sesuai.",
+        };
+      }
+      verifiedProviderAmount = grossAmount;
+    } catch (err) {
+      console.error("[createMyBookingAction] Midtrans verification:", err);
+      return {
+        success: false,
+        error: "Status pembayaran Midtrans belum dapat diverifikasi.",
+      };
+    }
+  }
+
   // Price every requested session (validates court / window / future).
   const checkoutBookings: CheckoutBookingInput[] = [];
   for (const s of input.sessions) {
@@ -371,6 +423,8 @@ export async function createMyBookingAction(
     memberId: member.id,
     customerName: member.name,
     bookings: checkoutBookings,
+    providerConfirmationId: input.providerOrderId,
+    expectedProviderAmount: verifiedProviderAmount,
   });
 
   if (!result.success) return { success: false, error: result.error };
@@ -386,6 +440,66 @@ export async function createMyBookingAction(
     payable: result.courtAmount,
     coveredCount: result.fullyCoveredByQuota ? input.sessions.length : undefined,
   };
+}
+
+/** Create a server-priced Midtrans Snap transaction for the current cart. */
+export async function startMyBookingMidtransAction(
+  input: Omit<CreateMyBookingInput, "providerOrderId">,
+): Promise<MidtransCheckoutResult> {
+  const guard = await requirePermission("portal.book", "create");
+  if (!guard.ok) return { success: false, error: guard.error };
+  const session = guard.session;
+  if (session.role !== "member") {
+    return { success: false, error: "Hanya member yang dapat membayar booking ini." };
+  }
+  const preview = await previewMyBookingAction(input);
+  if (!preview.success) return { success: false, error: preview.error };
+  if (preview.payable === 0) return { success: true, free: true };
+
+  try {
+    const db = await getTenantDb(session.dbConfig);
+    const [member, config] = await Promise.all([
+      db.t_member.findFirst({
+        where: { id: session.id, companyId: session.companyId, ...NOT_DELETED },
+        select: { name: true, email: true, phone: true },
+      }),
+      resolveMidtransConfig(db, session.companyId),
+    ]);
+    if (!member) return { success: false, error: "Member tidak ditemukan." };
+    const orderId = buildMidtransOrderId(session.companyId);
+    const payableLines = preview.lines.filter((line) => line.payable > 0);
+    const snap = await createMidtransSnapTransaction(config, {
+      orderId,
+      grossAmount: preview.payable,
+      customer: {
+        firstName: member.name,
+        email: member.email,
+        phone: member.phone,
+      },
+      itemDetails: payableLines.map((line, index) => ({
+        id: `${line.courtId.slice(0, 24)}-${index}`,
+        name: `${line.courtName} ${line.dateKey} ${line.label}`.slice(0, 50),
+        price: line.payable,
+        quantity: 1,
+      })),
+    });
+    return {
+      success: true,
+      orderId,
+      token: snap.token,
+      clientKey: config.clientKey,
+      production: config.production,
+    };
+  } catch (err) {
+    console.error("[startMyBookingMidtransAction] error:", err);
+    return {
+      success: false,
+      error:
+        err instanceof Error && err.message === "MIDTRANS_NOT_CONFIGURED"
+          ? "Midtrans belum dikonfigurasi oleh klub."
+          : "Gagal memulai pembayaran Midtrans.",
+    };
+  }
 }
 
 /** Member cancels one of their own future, not-yet-cancelled sessions. No
@@ -420,8 +534,6 @@ export async function cancelMyBookingAction(
     return { success: false, error: "Tidak bisa membatalkan sesi yang sudah lewat atau berjalan." };
   }
 
-  const wasQuotaCovered = detail.rateNote === "free (quota)";
-
   try {
     await db.$transaction(async (tx) => {
       const cancelled = await tx.t_booking_detail.updateMany({
@@ -446,7 +558,22 @@ export async function cancelMyBookingAction(
       }
 
       // Restore quota (−1, floor 0) when this session was quota-covered.
-      if (wasQuotaCovered && detail.booking!.memberId) {
+      const member = detail.booking!.memberId
+        ? await tx.t_member.findFirst({
+            where: {
+              id: detail.booking!.memberId,
+              companyId: session.companyId,
+              ...NOT_DELETED,
+            },
+            select: { cycleStart: true },
+          })
+        : null;
+      const restoreQuota = canRestoreQuotaForCancellation({
+        wasQuotaCovered: detail.rateNote === "free (quota)",
+        bookingCreatedAt: detail.booking!.createdAt,
+        currentCycleStart: member?.cycleStart ?? null,
+      });
+      if (restoreQuota && detail.booking!.memberId) {
         await tx.t_member.updateMany({
           where: {
             id: detail.booking!.memberId,
@@ -470,6 +597,17 @@ export async function cancelMyBookingAction(
             quotaConsumed: { decrement: 1 },
             ...auditUpdate(session.userId),
           },
+        });
+      }
+      if (detail.price > 0 && detail.booking!.paymentId) {
+        await recordBookingRefund(tx, {
+          companyId: session.companyId,
+          bookingDetailId: detail.id,
+          paymentId: detail.booking!.paymentId,
+          amount: detail.price,
+          method: detail.booking!.paymentMethod as PayMethod,
+          actorUserId: session.userId,
+          reason: "Cancelled by member",
         });
       }
     });

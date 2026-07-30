@@ -10,7 +10,14 @@
 
 import type { PrismaClient, Prisma } from "@prisma/tenant-client";
 import { calcMembershipBenefit } from "@/lib/membership-benefit";
-import { resolveMembershipQuotaCycle } from "@/lib/membership-quota";
+import {
+  quotaUnitsForDuration,
+  resolveMembershipQuotaCycle,
+} from "@/lib/membership-quota";
+import {
+  refundStatusForMethod,
+  validatePaymentInput,
+} from "@/lib/payment-rules";
 
 type Tx = Prisma.TransactionClient;
 
@@ -57,6 +64,10 @@ export interface RunCheckoutArgs {
   bookings?: CheckoutBookingInput[];
   /** cash tendered (staff cash only) */
   cashReceived?: number;
+  /** Provider transaction id proving a member non-cash payment settled. */
+  providerConfirmationId?: string;
+  /** Gross amount already verified directly with the payment provider. */
+  expectedProviderAmount?: number;
 }
 
 export interface CheckoutResult {
@@ -119,6 +130,18 @@ export async function resolveMemberBenefit(
     cycleStart: m.cycleStart,
     resetPeriodDays: m.plan.resetPeriodDays,
   });
+  // resetPeriodDays is the paid membership validity. Once elapsed, benefits
+  // stop until the member explicitly joins again.
+  if (quotaCycle.shouldStartNewCycle) {
+    return {
+      plan: null,
+      planName: null,
+      quotaRemaining: 0,
+      joinFeeDue: m.plan.joinFee,
+      resetPeriodDays: m.plan.resetPeriodDays,
+      shouldStartNewQuotaCycle: false,
+    };
+  }
   return {
     plan: {
       includedCourtBookings: m.plan.includedCourtBookings,
@@ -145,6 +168,7 @@ export interface ApplyMembershipArgs {
   planId: string;
   action: MembershipActionKind;
   actor: CheckoutActor;
+  externalId?: string;
   /** join fee charged for this action (0 = free) */
   joinFee: number;
   method?: PayMethod;
@@ -234,6 +258,7 @@ export interface RecordPaymentArgs {
   paidByType: ActorKind;
   cashReceived?: number;
   actor: CheckoutActor;
+  externalId?: string;
 }
 
 export async function recordPayment(
@@ -259,10 +284,67 @@ export async function recordPayment(
       cashReceived: args.method === "Cash" ? args.cashReceived ?? null : null,
       cashChange: args.method === "Cash" ? change : null,
       paidAt: new Date(),
+      provider: args.externalId ? "midtrans" : null,
+      externalId: args.externalId ?? null,
       createdBy: args.actor.userId,
     },
   });
   return { id: row.id, paymentRef, change };
+}
+
+export async function recordBookingRefund(
+  tx: Tx,
+  args: {
+    companyId: string;
+    bookingDetailId: string;
+    paymentId: string;
+    amount: number;
+    method: PayMethod;
+    actorUserId: string;
+    reason?: string;
+  },
+): Promise<void> {
+  if (!Number.isSafeInteger(args.amount) || args.amount <= 0) return;
+  const status = refundStatusForMethod(args.method);
+  await tx.t_refund.create({
+    data: {
+      companyId: args.companyId,
+      bookingDetailId: args.bookingDetailId,
+      paymentId: args.paymentId,
+      amount: args.amount,
+      status,
+      reason: args.reason ?? "Booking cancelled",
+      refundedAt: status === "refunded" ? new Date() : null,
+      createdBy: args.actorUserId,
+    },
+  });
+
+  if (status === "refunded") {
+    const [payment, refunded] = await Promise.all([
+      tx.t_payment.findUnique({ where: { id: args.paymentId } }),
+      tx.t_refund.aggregate({
+        where: {
+          paymentId: args.paymentId,
+          status: "refunded",
+          isDeleted: 0,
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+    if (payment) {
+      const refundedAmount = refunded._sum.amount ?? 0;
+      await tx.t_payment.update({
+        where: { id: payment.id },
+        data: {
+          status:
+            refundedAmount >= payment.amount
+              ? "refunded"
+              : "partially_refunded",
+          updatedBy: args.actorUserId,
+        },
+      });
+    }
+  }
 }
 
 /* ════════════════════════════════════════════════════════
@@ -291,6 +373,25 @@ export async function runCheckout(
   if (!args.membership && bookings.length === 0) {
     return { success: false, error: "Tidak ada yang dibayar." };
   }
+  for (const booking of bookings) {
+    const start = new Date(booking.start);
+    const end = new Date(booking.end);
+    if (
+      Number.isNaN(start.getTime()) ||
+      Number.isNaN(end.getTime()) ||
+      end <= start
+    ) {
+      return { success: false, error: "Waktu booking tidak valid." };
+    }
+    try {
+      quotaUnitsForDuration((end.getTime() - start.getTime()) / 60_000);
+    } catch {
+      return {
+        success: false,
+        error: "Setiap sesi booking membership harus tepat 60 menit.",
+      };
+    }
+  }
 
   try {
     const out = await db.$transaction(async (tx) => {
@@ -300,9 +401,16 @@ export async function runCheckout(
       // 2. membership FIRST
       if (args.membership) {
         const plan = await tx.m_membership_plan.findFirst({
-          where: { id: args.membership.planId, companyId: args.companyId, active: true, isDeleted: 0 },
+          where: {
+            id: args.membership.planId,
+            companyId: args.companyId,
+            active: true,
+            isDeleted: 0,
+          },
         });
         if (!plan) throw new Error("PLAN_NOT_FOUND");
+        // There is no renewal charge: every assign/rejoin/upgrade is a fresh
+        // join and therefore charges the configured plan join fee.
         membershipAmount = plan.joinFee;
         const res = await applyMembershipAction(tx, {
           companyId: args.companyId,
@@ -310,7 +418,7 @@ export async function runCheckout(
           planId: args.membership.planId,
           action: args.membership.action,
           actor: args.actor,
-          joinFee: plan.joinFee,
+          joinFee: membershipAmount,
           method: args.method,
         });
         historyId = res.historyId;
@@ -407,11 +515,23 @@ export async function runCheckout(
         }
       }
 
-      // 4. cash sufficiency (staff cash)
+      // 4. payment proof / cash sufficiency
       const total = membershipAmount + courtAmount;
-      if (args.method === "Cash") {
-        const received = args.cashReceived ?? 0;
-        if (received < total) throw new Error("CASH_SHORT");
+      if (
+        args.expectedProviderAmount !== undefined &&
+        total !== args.expectedProviderAmount
+      ) {
+        throw new Error("PAYMENT_AMOUNT_MISMATCH");
+      }
+      const paymentValidation = validatePaymentInput({
+        actor: args.actor.kind,
+        method: args.method,
+        total,
+        cashReceived: args.cashReceived,
+        providerConfirmationId: args.providerConfirmationId,
+      });
+      if (!paymentValidation.ok) {
+        throw new Error(`PAYMENT_INVALID:${paymentValidation.error}`);
       }
 
       // 5. one payment record, link it
@@ -422,6 +542,7 @@ export async function runCheckout(
         courtAmount,
         paidByType: args.actor.kind,
         cashReceived: args.cashReceived,
+        externalId: args.providerConfirmationId,
         actor: args.actor,
       });
 
@@ -459,6 +580,18 @@ function mapCheckoutError(err: unknown): string {
   if (msg === "PLAN_NOT_FOUND") return "Plan membership tidak ditemukan.";
   if (msg === "MEMBER_NOT_FOUND") return "Member tidak ditemukan.";
   if (msg === "CASH_SHORT") return "Uang tunai kurang dari total.";
+  if (msg.startsWith("PAYMENT_INVALID:")) return msg.slice("PAYMENT_INVALID:".length);
+  if (msg === "PAYMENT_AMOUNT_MISMATCH") {
+    return "Nominal pembayaran berubah. Transaksi tidak diproses; hubungi staff untuk rekonsiliasi.";
+  }
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    err.code === "P2002"
+  ) {
+    return "Transaksi pembayaran ini sudah pernah diproses.";
+  }
   if (msg.startsWith("SLOT_TAKEN")) return "Slot sudah ter-booking. Pilih waktu lain.";
   console.error("[runCheckout] error:", err);
   return "Gagal memproses checkout.";

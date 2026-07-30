@@ -82,6 +82,7 @@ export interface BenefitResult {
 
 const clampPct = (n: number) => Math.min(100, Math.max(0, n));
 
+
 /**
  * Compute the payable total + savings for a set of court sessions under a
  * member's plan. Quota is applied to the most expensive sessions first; the

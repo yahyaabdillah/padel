@@ -10,7 +10,6 @@ import Card from "@/components/ui/card/Card";
 import Badge from "@/components/ui/badge/Badge";
 import Button from "@/components/ui/button/Button";
 import Switch from "@/components/ui/switch/Switch";
-import InputLabel from "@/components/ui/input/InputLabel";
 import Tooltip from "@/components/ui/tooltip/Tooltip";
 import { useToast } from "@/components/ui/toast/ToastContext";
 import {

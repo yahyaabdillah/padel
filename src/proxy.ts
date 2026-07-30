@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSessionSecret, verifySessionToken } from "@/lib/session-token";
 
 const SESSION_COOKIE_NAME = "padelhub_session";
 
@@ -28,12 +29,7 @@ function isPublic(pathname: string): boolean {
 function parseSessionRole(req: NextRequest): Role | null {
   const cookie = req.cookies.get(SESSION_COOKIE_NAME);
   if (!cookie) return null;
-  try {
-    const session = JSON.parse(cookie.value) as { role?: Role };
-    return session.role ?? null;
-  } catch {
-    return null;
-  }
+  return verifySessionToken(cookie.value, getSessionSecret())?.role ?? null;
 }
 
 export function proxy(req: NextRequest) {

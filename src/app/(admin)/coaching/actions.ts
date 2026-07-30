@@ -1,11 +1,8 @@
 "use server";
 
-import { cookies } from "next/headers";
-import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
+import { getTenantDb, type TenantDbConfig } from "@/lib/tenant-db";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";
 import {
@@ -14,22 +11,14 @@ import {
   type CoachingCycle,
   type PlannedSlot,
   assignCoachForSlot,
+  coachingQuotaForSchedule,
   generateSlots,
-  localIso,
   makeDefaultAvailability,
   normalizeAvailability,
+  validateCoachingCycle,
+  isCoachAvailable,
 } from "@/lib/coaching";
-
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
+import { resolveMembershipQuotaCycle } from "@/lib/membership-quota";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const local = (d: Date) =>
@@ -70,9 +59,9 @@ export type CoachInput = {
 };
 
 export async function getCoachesAction(): Promise<CoachRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.m_coach.findMany({
     where: { companyId: session.companyId, ...NOT_DELETED },
     orderBy: { createdAt: "asc" },
@@ -100,7 +89,11 @@ export async function createCoachAction(
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
   if (!input.name.trim()) return { success: false, error: "Nama coach wajib diisi." };
-  const db = await getTenantDb();
+  const normalizedAvailability = normalizeAvailability(input.availability ?? makeDefaultAvailability());
+  if (normalizedAvailability.some((day) => day.start < 0 || day.end > 24 || day.start >= day.end)) {
+    return { success: false, error: "Jam availability coach tidak valid." };
+  }
+  const db = await getTenantDb(session.dbConfig);
   const created = await db.m_coach.create({
     data: {
       companyId: session.companyId,
@@ -113,7 +106,7 @@ export async function createCoachAction(
       ratePerHour: input.ratePerHour,
       specialties: input.specialties as Prisma.InputJsonValue,
       bio: input.bio?.trim() || null,
-      availability: (input.availability ?? makeDefaultAvailability()) as unknown as Prisma.InputJsonValue,
+      availability: normalizedAvailability as unknown as Prisma.InputJsonValue,
       ...auditCreate(session.userId),
     },
   });
@@ -128,7 +121,16 @@ export async function updateCoachAction(
   const guard = await requirePermission("coaching.coaches", "update");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  if (patch.name !== undefined && !patch.name.trim()) {
+    return { success: false, error: "Nama coach wajib diisi." };
+  }
+  if (
+    patch.availability !== undefined &&
+    normalizeAvailability(patch.availability).some((day) => day.start < 0 || day.end > 24 || day.start >= day.end)
+  ) {
+    return { success: false, error: "Jam availability coach tidak valid." };
+  }
+  const db = await getTenantDb(session.dbConfig);
   await db.m_coach.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: {
@@ -157,7 +159,7 @@ export async function deleteCoachAction(id: string): Promise<{ success: boolean;
   const guard = await requirePermission("coaching.coaches", "delete");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   await db.m_coach.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: auditSoftDelete(session.userId),
@@ -187,9 +189,9 @@ export type PackageInput = Omit<PackageRecord, "id">;
 export async function getCoachPackagesAction(
   opts?: { activeOnly?: boolean },
 ): Promise<PackageRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.m_coach_package.findMany({
     where: {
       companyId: session.companyId,
@@ -218,8 +220,12 @@ export async function createCoachPackageAction(
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
   if (!input.name.trim()) return { success: false, error: "Nama paket wajib diisi." };
-  if (input.sessions < 1) return { success: false, error: "Jumlah sesi minimal 1." };
-  const db = await getTenantDb();
+  if (!Number.isInteger(input.sessions) || input.sessions < 1) return { success: false, error: "Jumlah sesi minimal 1." };
+  if (!Number.isInteger(input.durationMin) || input.durationMin < 15 || input.durationMin > 1440) {
+    return { success: false, error: "Durasi paket harus antara 15 dan 1440 menit." };
+  }
+  if (!Number.isInteger(input.price) || input.price < 0) return { success: false, error: "Harga paket tidak valid." };
+  const db = await getTenantDb(session.dbConfig);
   const created = await db.m_coach_package.create({
     data: {
       companyId: session.companyId,
@@ -245,7 +251,17 @@ export async function updateCoachPackageAction(
   const guard = await requirePermission("coaching.packages", "update");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  if (patch.name !== undefined && !patch.name.trim()) return { success: false, error: "Nama paket wajib diisi." };
+  if (patch.sessions !== undefined && (!Number.isInteger(patch.sessions) || patch.sessions < 1)) {
+    return { success: false, error: "Jumlah sesi minimal 1." };
+  }
+  if (patch.durationMin !== undefined && (!Number.isInteger(patch.durationMin) || patch.durationMin < 15 || patch.durationMin > 1440)) {
+    return { success: false, error: "Durasi paket tidak valid." };
+  }
+  if (patch.price !== undefined && (!Number.isInteger(patch.price) || patch.price < 0)) {
+    return { success: false, error: "Harga paket tidak valid." };
+  }
+  const db = await getTenantDb(session.dbConfig);
   await db.m_coach_package.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: {
@@ -268,7 +284,7 @@ export async function deleteCoachPackageAction(id: string): Promise<{ success: b
   const guard = await requirePermission("coaching.packages", "delete");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   await db.m_coach_package.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: auditSoftDelete(session.userId),
@@ -284,8 +300,9 @@ export async function deleteCoachPackageAction(id: string): Promise<{ success: b
 /** Load every active coach's availability + their currently-booked sessions. */
 async function loadCoachAvailability(
   companyId: string,
+  dbConfig: TenantDbConfig | undefined,
 ): Promise<CoachAvailabilityInput[]> {
-  const db = await getTenantDb();
+  const db = await getTenantDb(dbConfig);
   const coaches = await db.m_coach.findMany({
     where: { companyId, status: "active", ...NOT_DELETED },
   });
@@ -335,25 +352,33 @@ export async function generateScheduleAction(input: {
   startDate: string; // YYYY-MM-DD
   cycle: CoachingCycle;
 }): Promise<GenerateScheduleResult> {
-  const session = await requireSession();
-  if (!session) return { success: false, error: "Not authenticated.", sessions: [] };
+  const guard = await requirePermission("coaching.schedule", "create");
+  if (!guard.ok) return { success: false, error: guard.error, sessions: [] };
+  const session = guard.session;
 
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const pkg = await db.m_coach_package.findFirst({
-    where: { id: input.packageId, companyId: session.companyId, ...NOT_DELETED },
+    where: { id: input.packageId, companyId: session.companyId, active: true, ...NOT_DELETED },
   });
   if (!pkg) return { success: false, error: "Paket tidak ditemukan.", sessions: [] };
-  if (!input.cycle.slots.length) {
-    return { success: false, error: "Pilih minimal satu hari dalam siklus.", sessions: [] };
+  const cycleValidation = validateCoachingCycle(input.cycle);
+  if (!cycleValidation.ok) {
+    return { success: false, error: cycleValidation.error, sessions: [] };
   }
 
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate)) {
+    return { success: false, error: "Tanggal mulai tidak valid.", sessions: [] };
+  }
   const startDate = new Date(`${input.startDate}T00:00:00`);
   if (Number.isNaN(startDate.getTime())) {
     return { success: false, error: "Tanggal mulai tidak valid.", sessions: [] };
   }
 
   const slots: PlannedSlot[] = generateSlots(startDate, input.cycle, pkg.sessions);
-  const coaches = await loadCoachAvailability(session.companyId);
+  const coaches = await loadCoachAvailability(
+    session.companyId,
+    session.dbConfig,
+  );
   const coachName = new Map(
     (await db.m_coach.findMany({
       where: { companyId: session.companyId, ...NOT_DELETED },
@@ -384,10 +409,30 @@ export async function getAvailableCoachesForSlotAction(input: {
   /** exclude these (already-assigned in the current draft) — optional */
   ignoreSessionId?: string;
 }): Promise<{ id: string; name: string }[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const coaches = await loadCoachAvailability(session.companyId);
-  const db = await getTenantDb();
+  const coaches = await loadCoachAvailability(
+    session.companyId,
+    session.dbConfig,
+  );
+  const db = await getTenantDb(session.dbConfig);
+  const ignored = input.ignoreSessionId
+    ? await db.t_coaching_session.findFirst({
+        where: { id: input.ignoreSessionId, companyId: session.companyId, ...NOT_DELETED },
+        select: { coachId: true, start: true, end: true },
+      })
+    : null;
+  if (ignored) {
+    for (const coach of coaches) {
+      if (coach.id === ignored.coachId) {
+        coach.busy = coach.busy.filter(
+          (b) =>
+            new Date(b.start).getTime() !== ignored.start.getTime() ||
+            new Date(b.end).getTime() !== ignored.end.getTime(),
+        );
+      }
+    }
+  }
   const names = new Map(
     (await db.m_coach.findMany({
       where: { companyId: session.companyId, ...NOT_DELETED },
@@ -437,43 +482,139 @@ export async function createScheduleAction(input: {
     const session = guard.session;
     if (!input.memberId) return { success: false, error: "Pilih member." };
     if (!input.sessions.length) return { success: false, error: "Belum ada sesi." };
+    const db = await getTenantDb(session.dbConfig);
+    const cycleValidation = validateCoachingCycle(input.cycle);
+    if (!cycleValidation.ok) return { success: false, error: cycleValidation.error };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate)) {
+      return { success: false, error: "Tanggal mulai tidak valid." };
+    }
+    const startDate = new Date(`${input.startDate}T00:00:00`);
+    if (Number.isNaN(startDate.getTime())) return { success: false, error: "Tanggal mulai tidak valid." };
 
-    const db = await getTenantDb();
-    const pkg = await db.m_coach_package.findFirst({
-      where: { id: input.packageId, companyId: session.companyId, ...NOT_DELETED },
-    });
-    if (!pkg) return { success: false, error: "Paket tidak ditemukan." };
+    const created = await db.$transaction(async (tx) => {
+      const [member, pkg] = await Promise.all([
+        tx.t_member.findFirst({
+          where: { id: input.memberId, companyId: session.companyId, status: "active", ...NOT_DELETED },
+          include: { plan: { select: { freeCoaching: true, resetPeriodDays: true, active: true, isDeleted: true } } },
+        }),
+        tx.m_coach_package.findFirst({
+          where: { id: input.packageId, companyId: session.companyId, active: true, ...NOT_DELETED },
+        }),
+      ]);
+      if (!member) throw new Error("MEMBER_NOT_FOUND");
+      if (!pkg) throw new Error("PACKAGE_NOT_FOUND");
+      if (input.sessions.length !== pkg.sessions) throw new Error("SESSION_COUNT_MISMATCH");
+      if (pkg.durationMin !== input.cycle.durationMin) throw new Error("DURATION_MISMATCH");
 
-    const created = await db.t_coaching_schedule.create({
-      data: {
-        companyId: session.companyId,
-        memberId: input.memberId,
-        packageId: pkg.id,
-        packageName: pkg.name,
-        totalSessions: pkg.sessions,
-        price: pkg.price,
-        startDate: new Date(`${input.startDate}T00:00:00`),
-        cycle: input.cycle as unknown as Prisma.InputJsonValue,
-        note: input.note?.trim() || null,
-        ...auditCreate(session.userId),
-        sessions: {
-          create: input.sessions.map((s) => ({
-            companyId: session.companyId,
-            coachId: s.coachId,
-            sequence: s.sequence,
-            start: new Date(s.start),
-            end: new Date(s.end),
-            status: s.coachId ? "scheduled" : "no_coach",
-            ...auditCreate(session.userId),
-          })),
+      const expected = generateSlots(startDate, input.cycle, pkg.sessions);
+      if (
+        expected.length !== input.sessions.length ||
+        expected.some((slot, i) =>
+          slot.sequence !== input.sessions[i].sequence ||
+          slot.start !== input.sessions[i].start ||
+          slot.end !== input.sessions[i].end,
+        )
+      ) {
+        throw new Error("SLOT_MISMATCH");
+      }
+
+      const coachIds = [...new Set(input.sessions.map((s) => s.coachId).filter((id): id is string => Boolean(id)))];
+      const coaches = await tx.m_coach.findMany({
+        where: { companyId: session.companyId, id: { in: coachIds }, status: "active", ...NOT_DELETED },
+        select: { id: true, status: true, availability: true },
+      });
+      if (coaches.length !== coachIds.length) throw new Error("COACH_NOT_FOUND");
+      const existing = await tx.t_coaching_session.findMany({
+        where: {
+          companyId: session.companyId,
+          coachId: { in: coachIds },
+          status: { in: ["scheduled", "completed"] },
+          ...NOT_DELETED,
         },
-      },
-    });
+        select: { coachId: true, start: true, end: true },
+      });
+      const availability = coaches.map((coach) => ({
+        id: coach.id,
+        status: coach.status,
+        availability: normalizeAvailability(coach.availability),
+        busy: existing
+          .filter((item) => item.coachId === coach.id)
+          .map((item) => ({ start: local(item.start), end: local(item.end) })),
+      }));
+      for (const item of input.sessions) {
+        if (!item.coachId) continue;
+        const coach = availability.find((candidate) => candidate.id === item.coachId);
+        if (!coach || !isCoachAvailable(coach, item.start, item.end)) {
+          throw new Error("COACH_UNAVAILABLE");
+        }
+        coach.busy.push({ start: item.start, end: item.end });
+      }
+
+      const quota = resolveMembershipQuotaCycle({
+        quotaUsed: member.coachingUsed,
+        cycleStart: member.cycleStart,
+        resetPeriodDays: member.plan?.resetPeriodDays ?? 0,
+      });
+      const freeCoaching =
+        member.plan?.active && !member.plan.isDeleted ? member.plan.freeCoaching : 0;
+      const quotaUse = coachingQuotaForSchedule({
+        freeCoaching,
+        coachingUsed: quota.effectiveQuotaUsed,
+        sessionCount: pkg.sessions,
+      });
+      const createdSchedule = await tx.t_coaching_schedule.create({
+        data: {
+          companyId: session.companyId,
+          memberId: input.memberId,
+          packageId: pkg.id,
+          packageName: pkg.name,
+          totalSessions: pkg.sessions,
+          price: pkg.price,
+          coachingQuotaConsumed: quotaUse.consumed,
+          startDate,
+          cycle: input.cycle as unknown as Prisma.InputJsonValue,
+          note: input.note?.trim() || null,
+          ...auditCreate(session.userId),
+          sessions: {
+            create: input.sessions.map((item) => ({
+              companyId: session.companyId,
+              coachId: item.coachId,
+              sequence: item.sequence,
+              start: new Date(item.start),
+              end: new Date(item.end),
+              status: item.coachId ? "scheduled" : "no_coach",
+              ...auditCreate(session.userId),
+            })),
+          },
+        },
+      });
+      await tx.t_member.update({
+        where: { id: member.id },
+        data: {
+          coachingUsed: quota.shouldStartNewCycle
+            ? quotaUse.consumed
+            : { increment: quotaUse.consumed },
+          ...(quota.shouldStartNewCycle ? { cycleStart: new Date() } : {}),
+          ...auditUpdate(session.userId),
+        },
+      });
+      return createdSchedule;
+    }, { isolationLevel: "Serializable" });
     revalidatePath("/coaching/schedule");
     return { success: true, id: created.id };
   } catch (err) {
     console.error("[createScheduleAction] error:", err);
-    return { success: false, error: "Gagal menyimpan jadwal coaching." };
+    const code = err instanceof Error ? err.message : "";
+    const errors: Record<string, string> = {
+      MEMBER_NOT_FOUND: "Member aktif tidak ditemukan.",
+      PACKAGE_NOT_FOUND: "Paket aktif tidak ditemukan.",
+      SESSION_COUNT_MISMATCH: "Jumlah sesi tidak sesuai paket.",
+      DURATION_MISMATCH: "Durasi sesi tidak sesuai paket.",
+      SLOT_MISMATCH: "Slot sesi tidak sesuai siklus yang dipilih.",
+      COACH_NOT_FOUND: "Coach aktif tidak ditemukan.",
+      COACH_UNAVAILABLE: "Ada coach yang tidak tersedia atau bentrok.",
+    };
+    return { success: false, error: errors[code] ?? "Gagal menyimpan jadwal coaching." };
   }
 }
 
@@ -494,6 +635,7 @@ export type ScheduleRecord = {
   packageName: string;
   totalSessions: number;
   price: number;
+  coachingQuotaConsumed: number;
   startDate: string;
   status: string;
   cycle: CoachingCycle;
@@ -501,9 +643,9 @@ export type ScheduleRecord = {
 };
 
 export async function getSchedulesAction(): Promise<ScheduleRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.t_coaching_schedule.findMany({
     where: { companyId: session.companyId, ...NOT_DELETED },
     orderBy: { createdAt: "desc" },
@@ -523,6 +665,7 @@ export async function getSchedulesAction(): Promise<ScheduleRecord[]> {
     packageName: s.packageName,
     totalSessions: s.totalSessions,
     price: s.price,
+    coachingQuotaConsumed: s.coachingQuotaConsumed,
     startDate: local(s.startDate),
     status: s.status,
     cycle: s.cycle as unknown as CoachingCycle,
@@ -546,14 +689,46 @@ export async function reassignSessionCoachAction(
   const guard = await requirePermission("coaching.schedule", "update");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
+  const target = await db.t_coaching_session.findFirst({
+    where: {
+      id: sessionId,
+      companyId: session.companyId,
+      ...NOT_DELETED,
+      schedule: { companyId: session.companyId, status: "active", ...NOT_DELETED },
+    },
+    select: { start: true, end: true },
+  });
+  if (!target) return { success: false, error: "Sesi coaching tidak ditemukan." };
+  if (coachId) {
+    const coach = await db.m_coach.findFirst({
+      where: { id: coachId, companyId: session.companyId, status: "active", ...NOT_DELETED },
+      select: { id: true, status: true, availability: true },
+    });
+    if (!coach) return { success: false, error: "Coach aktif tidak ditemukan." };
+    const existing = await db.t_coaching_session.findMany({
+      where: {
+        companyId: session.companyId,
+        coachId,
+        id: { not: sessionId },
+        status: { in: ["scheduled", "completed"] },
+        ...NOT_DELETED,
+      },
+      select: { start: true, end: true },
+    });
+    const candidate = {
+      id: coach.id,
+      status: coach.status,
+      availability: normalizeAvailability(coach.availability),
+      busy: existing.map((item) => ({ start: local(item.start), end: local(item.end) })),
+    };
+    if (!isCoachAvailable(candidate, local(target.start), local(target.end))) {
+      return { success: false, error: "Coach tidak tersedia pada waktu sesi tersebut." };
+    }
+  }
   await db.t_coaching_session.updateMany({
     where: { id: sessionId, companyId: session.companyId, ...NOT_DELETED },
-    data: {
-      coachId,
-      status: coachId ? "scheduled" : "no_coach",
-      ...auditUpdate(session.userId),
-    },
+    data: { coachId, status: coachId ? "scheduled" : "no_coach", ...auditUpdate(session.userId) },
   });
   revalidatePath("/coaching/schedule");
   return { success: true };
@@ -563,16 +738,37 @@ export async function deleteScheduleAction(id: string): Promise<{ success: boole
   const guard = await requirePermission("coaching.schedule", "delete");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
-  // soft-delete the schedule + its sessions
-  await db.t_coaching_session.updateMany({
-    where: { scheduleId: id, companyId: session.companyId, ...NOT_DELETED },
-    data: auditSoftDelete(session.userId),
-  });
-  await db.t_coaching_schedule.updateMany({
-    where: { id, companyId: session.companyId, ...NOT_DELETED },
-    data: auditSoftDelete(session.userId),
-  });
+  const db = await getTenantDb(session.dbConfig);
+  await db.$transaction(async (tx) => {
+    const schedule = await tx.t_coaching_schedule.findFirst({
+      where: { id, companyId: session.companyId, ...NOT_DELETED },
+      select: { memberId: true, coachingQuotaConsumed: true },
+    });
+    if (!schedule) return;
+    await tx.t_coaching_session.updateMany({
+      where: { scheduleId: id, companyId: session.companyId, ...NOT_DELETED },
+      data: auditSoftDelete(session.userId),
+    });
+    await tx.t_coaching_schedule.updateMany({
+      where: { id, companyId: session.companyId, ...NOT_DELETED },
+      data: auditSoftDelete(session.userId),
+    });
+    if (schedule.coachingQuotaConsumed > 0) {
+      const member = await tx.t_member.findFirst({
+        where: { id: schedule.memberId, companyId: session.companyId, ...NOT_DELETED },
+        select: { coachingUsed: true },
+      });
+      if (member) {
+        await tx.t_member.updateMany({
+          where: { id: schedule.memberId, companyId: session.companyId, ...NOT_DELETED },
+          data: {
+            coachingUsed: Math.max(0, member.coachingUsed - schedule.coachingQuotaConsumed),
+            ...auditUpdate(session.userId),
+          },
+        });
+      }
+    }
+  }, { isolationLevel: "Serializable" });
   revalidatePath("/coaching/schedule");
   return { success: true };
 }
@@ -581,9 +777,9 @@ export async function deleteScheduleAction(id: string): Promise<{ success: boole
 export async function getCoachingMemberOptionsAction(): Promise<
   { id: string; name: string; phone: string }[]
 > {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.t_member.findMany({
     where: { companyId: session.companyId, ...NOT_DELETED },
     orderBy: { createdAt: "desc" },

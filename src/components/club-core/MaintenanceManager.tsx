@@ -7,7 +7,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Wrench, CalendarOff, PartyPopper, CircleSlash, Trash2 } from "lucide-react";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
-import Card from "@/components/ui/card/Card";
 import Button from "@/components/ui/button/Button";
 import UiSelect from "@/components/ui/select/Select";
 import DatePicker from "@/components/ui/datepicker/DatePicker";

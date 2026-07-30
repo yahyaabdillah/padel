@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { Building2, ScanLine, Clock, Trash2 } from "lucide-react";
+import { Building2, ScanLine, Clock, CreditCard, Trash2 } from "lucide-react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
 import Card from "@/components/ui/card/Card";
 import Button from "@/components/ui/button/Button";
@@ -68,14 +68,6 @@ export default function CompanySettingsClient() {
     setForm((f) => (f ? { ...f, ...p } : f));
 
   /* ── logo upload → crop to 1:1 → persist ── */
-  const fileToDataUrl = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
   const persistLogo = useCallback(
     async (dataUrl: string) => {
       setUploadingLogo(true);
@@ -103,6 +95,11 @@ export default function CompanySettingsClient() {
           scanStaffBooking: current.scanStaffBooking,
           strictWindow: current.strictWindow,
           checkinWindowMin: current.checkinWindowMin,
+          midtransEnabled: current.midtransEnabled,
+          midtransProduction: current.midtransProduction,
+          midtransMerchantId: current.midtransMerchantId,
+          midtransClientKey: current.midtransClientKey,
+          midtransServerKey: current.midtransServerKey,
         });
         setUploadingLogo(false);
         if (!saved.success) {
@@ -161,6 +158,11 @@ export default function CompanySettingsClient() {
       scanStaffBooking: form.scanStaffBooking,
       strictWindow: form.strictWindow,
       checkinWindowMin: form.checkinWindowMin,
+      midtransEnabled: form.midtransEnabled,
+      midtransProduction: form.midtransProduction,
+      midtransMerchantId: form.midtransMerchantId,
+      midtransClientKey: form.midtransClientKey,
+      midtransServerKey: form.midtransServerKey,
     });
     setSaving(false);
     if (!res.success) {
@@ -290,6 +292,80 @@ export default function CompanySettingsClient() {
               />
             )
           )}
+        </Card>
+
+        {/* ── Midtrans ── */}
+        <Card className="lg:col-span-3" padding="lg">
+          <div className="mb-5 flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--color-primary-light)] text-[var(--color-primary)]">
+              <CreditCard className="h-4.5 w-4.5" />
+            </span>
+            <div>
+              <h3 className="text-base font-bold text-[var(--text-heading)]">Pembayaran Midtrans</h3>
+              <p className="text-xs text-[var(--text-muted)]">
+                Kredensial berlaku khusus tenant ini. Server Key disimpan terenkripsi dan tidak pernah dikirim kembali ke browser.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-4 rounded-xl bg-[var(--surface-muted)] px-4 py-3.5">
+              <div>
+                <p className="text-sm font-medium text-[var(--text-heading)]">Aktifkan Midtrans</p>
+                <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                  Menampilkan Snap di halaman pembayaran member dan POS.
+                </p>
+              </div>
+              <Switch
+                checked={form.midtransEnabled}
+                onChange={(v) => patch({ midtransEnabled: v })}
+                disabled={disabled}
+              />
+            </div>
+
+            <div className="flex items-start justify-between gap-4 rounded-xl bg-[var(--surface-muted)] px-4 py-3.5">
+              <div>
+                <p className="text-sm font-medium text-[var(--text-heading)]">Mode Production</p>
+                <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                  Nonaktifkan untuk memakai Midtrans Sandbox.
+                </p>
+              </div>
+              <Switch
+                checked={form.midtransProduction}
+                onChange={(v) => patch({ midtransProduction: v })}
+                disabled={disabled || !form.midtransEnabled}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <TextInput
+                label="Merchant ID"
+                value={form.midtransMerchantId ?? ""}
+                onChange={(v) => patch({ midtransMerchantId: v })}
+                placeholder="G123456789"
+                disabled={disabled || !form.midtransEnabled}
+              />
+              <TextInput
+                label="Client Key"
+                value={form.midtransClientKey ?? ""}
+                onChange={(v) => patch({ midtransClientKey: v })}
+                placeholder="SB-Mid-client-..."
+                disabled={disabled || !form.midtransEnabled}
+              />
+              <TextInput
+                label="Server Key"
+                type="password"
+                value={form.midtransServerKey}
+                onChange={(v) => patch({ midtransServerKey: v })}
+                placeholder={
+                  form.midtransServerKeyConfigured
+                    ? "Tersimpan — isi untuk mengganti"
+                    : "SB-Mid-server-..."
+                }
+                disabled={disabled || !form.midtransEnabled}
+              />
+            </div>
+          </div>
         </Card>
 
         {/* ── Pengaturan Check-in ── */}

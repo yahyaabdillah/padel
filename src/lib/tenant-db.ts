@@ -93,7 +93,7 @@ function buildUrl(cfg: TenantDbConfig): string {
   const port = cfg.port ?? 5432;
   const pw = encodeURIComponent(cfg.password);
   return applyPoolParams(
-    `postgresql://${cfg.username}:${cfg.password}@${cfg.host}:${port}/${cfg.name}?schema=public`,
+    `postgresql://${cfg.username}:${pw}@${cfg.host}:${port}/${cfg.name}?schema=public`,
   );
 }
 

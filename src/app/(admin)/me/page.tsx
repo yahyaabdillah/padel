@@ -13,7 +13,6 @@ import StatCard from "@/components/member/StatCard";
 import MembershipCard from "@/components/member/MembershipCard";
 import BookingCard from "@/components/member/BookingCard";
 import {
-  CalendarIcon,
   WalletIcon,
   TrophyIcon,
   BoltIcon,

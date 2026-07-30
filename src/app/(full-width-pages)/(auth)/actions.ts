@@ -8,6 +8,7 @@ import {
 } from "@/lib/auth";
 import { getAppMode, SESSION_COOKIE_NAME, getCustomTenantCompanyId } from "@/lib/env";
 import type { TenantDbConfig } from "@/lib/tenant-db";
+import { getSessionSecret, signSessionToken, verifySessionToken } from "@/lib/session-token";
 
 /**
  * Cookie session — plain JSON (httpOnly). The tenant DB password is intentionally
@@ -17,19 +18,25 @@ import type { TenantDbConfig } from "@/lib/tenant-db";
 type CookieSession = Omit<AuthSession, "dbConfig">;
 
 function toCookieSession(s: AuthSession): CookieSession {
-  const { dbConfig: _dbConfig, ...rest } = s;
+  const { dbConfig, ...rest } = s;
+  void dbConfig;
   return rest;
 }
 
 async function writeSessionCookie(session: CookieSession) {
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+  const maxAge = 60 * 60 * 24 * 7;
+  cookieStore.set(
+    SESSION_COOKIE_NAME,
+    signSessionToken(session, getSessionSecret(), maxAge),
+    {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
-    maxAge: 60 * 60 * 24 * 7, // 1 week
+    maxAge,
     path: "/",
-  });
+    },
+  );
 }
 
 export interface LoginResult {
@@ -86,11 +93,7 @@ export async function getSessionAction(): Promise<CookieSession | null> {
   const cookieStore = await cookies();
   const cookie = cookieStore.get(SESSION_COOKIE_NAME);
   if (!cookie) return null;
-  try {
-    return JSON.parse(cookie.value) as CookieSession;
-  } catch {
-    return null;
-  }
+  return verifySessionToken(cookie.value, getSessionSecret());
 }
 
 /**

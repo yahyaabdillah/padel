@@ -16,7 +16,6 @@ import {
   getOperatingHoursAction,
   updateOperatingHourAction,
   setAllOperatingHoursAction,
-  type OperatingHour,
 } from "@/app/(admin)/settings/hours/actions";
 
 /** Operating window for one weekday (0 = Sunday … 6 = Saturday). */

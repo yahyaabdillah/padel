@@ -9,7 +9,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as Lucide from "lucide-react";
 import { Plus, Pencil, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
-import Card from "@/components/ui/card/Card";
 import Badge from "@/components/ui/badge/Badge";
 import Button from "@/components/ui/button/Button";
 import Switch from "@/components/ui/switch/Switch";

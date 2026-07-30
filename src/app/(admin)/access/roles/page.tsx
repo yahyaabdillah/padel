@@ -159,7 +159,7 @@ export default function RolesPermissionsPage() {
     // Parent (group) rows always reflect the aggregate of their children so the
     // displayed parent checkboxes stay consistent with what actually governs.
     setMatrix(recomputeParentsFromMenus(map, menus));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [menus]);
 
   useEffect(() => {
@@ -198,7 +198,7 @@ export default function RolesPermissionsPage() {
   const toggle = (menu: MenuRecord, action: MenuAction) => {
     setMatrix((prev) => {
       const kids = childrenOf(menu.key);
-      let next = { ...prev };
+      const next = { ...prev };
       if (kids.length > 0) {
         // Parent group: this column acts as a bulk control over all children.
         const newValue = !flagsFor(menu.id)[ACTION_FLAG[action]];
@@ -225,7 +225,7 @@ export default function RolesPermissionsPage() {
         canExport: on,
       };
       const kids = childrenOf(menu.key);
-      let next = { ...prev };
+      const next = { ...prev };
       if (kids.length > 0) {
         for (const k of kids) next[k.id] = { ...all };
       } else {

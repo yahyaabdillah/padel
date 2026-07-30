@@ -106,7 +106,9 @@ export async function getMembershipMembersAction(q?: string): Promise<Membership
       let used = m.quotaUsed;
       if (m.plan.resetPeriodDays > 0 && m.cycleStart) {
         const elapsed = Math.floor((Date.now() - m.cycleStart.getTime()) / 86_400_000);
-        if (elapsed >= m.plan.resetPeriodDays) used = 0;
+        if (elapsed >= m.plan.resetPeriodDays) {
+          used = m.plan.includedCourtBookings;
+        }
       }
       quotaTotal = m.plan.includedCourtBookings;
       quotaRemaining = Math.max(0, m.plan.includedCourtBookings - used);
@@ -155,7 +157,7 @@ export async function getMembershipOverviewAction(
     let resetAt: string | null = null;
     if (m.plan.resetPeriodDays > 0 && m.cycleStart) {
       const elapsed = Math.floor((Date.now() - m.cycleStart.getTime()) / 86_400_000);
-      if (elapsed >= m.plan.resetPeriodDays) used = 0;
+      if (elapsed >= m.plan.resetPeriodDays) used = m.plan.includedCourtBookings;
       const next = new Date(m.cycleStart);
       next.setDate(next.getDate() + m.plan.resetPeriodDays);
       resetAt = next.toISOString().slice(0, 10);

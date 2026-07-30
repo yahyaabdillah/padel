@@ -2,7 +2,6 @@
 
 import React, { useMemo, useState } from "react";
 import PageScaffold from "@/components/club-engage/PageScaffold";
-import StatCard from "@/components/club-engage/StatCard";
 import EngageAvatar from "@/components/club-engage/EngageAvatar";
 import MatchScoreCard from "@/components/club-engage/MatchScoreCard";
 import { formatDateLong } from "@/components/club-engage/format";

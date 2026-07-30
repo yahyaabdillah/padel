@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   areSlotsConsecutive,
   availabilityRangeForCandidateSlot,
+  bookingSlotStartsForSchedules,
   groupSlotsByTimeGroups,
   intervalsOverlap,
   isSlotPast,
@@ -156,4 +157,45 @@ test("slot dikelompokkan mengikuti master group waktu dan sort order", () => {
       { id: "__other", slots: [36] },
     ],
   );
+});
+
+test("pilihan waktu hanya memuat sesi 60 menit yang dibuka oleh jadwal lapangan", () => {
+  const closed = Array.from({ length: 48 }, () => "closed");
+  const openNineToEleven = [...closed];
+  openNineToEleven[18] = "regular";
+  openNineToEleven[19] = "regular";
+  openNineToEleven[20] = "peak";
+  openNineToEleven[21] = "peak";
+
+  assert.deepEqual(
+    bookingSlotStartsForSchedules(
+      [[{ day: 4, available: true, slots: openNineToEleven }]],
+      4,
+    ),
+    [18, 20],
+  );
+});
+
+test("slot tetap ditampilkan bila jadwal buka meskipun availability transaksi nanti penuh", () => {
+  const slots = Array.from({ length: 48 }, () => "closed");
+  slots[20] = "regular";
+  slots[21] = "regular";
+
+  assert.deepEqual(
+    bookingSlotStartsForSchedules(
+      [[{ day: 4, available: true, slots }]],
+      4,
+    ),
+    [20],
+  );
+});
+
+test("action master grouping membaca cookie sesi bertanda tangan", () => {
+  const source = readFileSync(
+    "src/app/(admin)/settings/hours/group-actions.ts",
+    "utf8",
+  );
+  assert.match(source, /import\s+\{\s*readSession/);
+  assert.match(source, /const session = await readSession\(\)/);
+  assert.doesNotMatch(source, /JSON\.parse\(raw\)/);
 });

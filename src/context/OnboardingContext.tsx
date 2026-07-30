@@ -127,7 +127,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   const override = store[seedId];
   const seedOnboarded = member?.onboarded ?? false;
   const onboarded = override ? override.onboarded : seedOnboarded;
-  const profile = override?.profile ?? {};
+  const profile = useMemo(() => override?.profile ?? {}, [override?.profile]);
 
   const persist = useCallback((next: Store) => {
     setStore(next);

@@ -37,7 +37,7 @@ import {
   type Court,
 } from "@/data/padel/club/courts";
 import { dateKey as toDateKey } from "@/data/padel/club/bookings";
-import { paymentMethods, type PaymentMethod } from "@/data/padel/engage/products";
+import type { PayMethod } from "@/lib/checkout-core";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const todayKey = "2026-06-02";
@@ -114,7 +114,8 @@ export default function BookingPayment({
     })();
   }, [memberId]);
 
-  const [method, setMethod] = useState<PaymentMethod>("QRIS");
+  const paymentMethods: PayMethod[] = ["Cash", "QRIS", "Transfer"];
+  const [method, setMethod] = useState<PayMethod>("QRIS");
   const [cash, setCash] = useState("");
   const [confirmedRef, setConfirmedRef] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -219,6 +220,7 @@ export default function BookingPayment({
         memberId: member.id,
         quotaConsumed: benefit.quotaCoveredCount,
         joinFee: joinFeeDue,
+        cashReceived: method === "Cash" ? cashNum : undefined,
       },
     );
     if (!res.success || !res.id) {

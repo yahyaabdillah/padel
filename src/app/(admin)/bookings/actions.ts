@@ -1,21 +1,28 @@
 "use server";
 
-import { cookies } from "next/headers";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";
+import {
+  recordBookingRefund,
+  recordPayment,
+  type PayMethod,
+} from "@/lib/checkout-core";
+import { validatePaymentInput } from "@/lib/payment-rules";
 import { calcMembershipBenefit } from "@/lib/membership-benefit";
-import { resolveMembershipQuotaCycle } from "@/lib/membership-quota";
+import {
+  canRestoreQuotaForCancellation,
+  resolveMembershipQuotaCycle,
+} from "@/lib/membership-quota";
 import {
   BOOKING_SLOT_MINUTES,
   STORAGE_SLOT_MINUTES,
   STORAGE_SLOTS_PER_SESSION,
   areSlotsConsecutive,
   availabilityRangeForCandidateSlot,
+  bookingSlotStartsForSchedules,
   dateKeyInTimeZone,
   intervalsOverlap,
   isValidDateKey,
@@ -205,9 +212,11 @@ export async function getBookingAvailabilityAction(input: {
       }).length;
     };
 
-    const slotStarts = Array.from(
-      { length: 24 / (BOOKING_SLOT_MINUTES / 60) },
-      (_, index) => index * STORAGE_SLOTS_PER_SESSION,
+    const slotStarts = bookingSlotStartsForSchedules(
+      courts.map(
+        (court) => court.schedule as unknown as DaySchedule[],
+      ),
+      day,
     );
     const slots: BookingTimeSlot[] = slotStarts.map((startSlot) => {
       const endSlot = startSlot + STORAGE_SLOTS_PER_SESSION;
@@ -296,17 +305,6 @@ export async function getBookingAvailabilityAction(input: {
   }
 }
 
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
-
 export type BookingDetailInput = {
   courtId: string;
   start: string; // ISO datetime
@@ -343,7 +341,12 @@ export type CreateBookingsResult = {
  * collect the member's outstanding membership join fee in the same checkout. */
 export async function createBookingsAction(
   input: CreateBookingInput,
-  opts?: { memberId?: string; quotaConsumed?: number; joinFee?: number },
+  opts?: {
+    memberId?: string;
+    quotaConsumed?: number;
+    joinFee?: number;
+    cashReceived?: number;
+  },
 ): Promise<CreateBookingsResult> {
   const guard = await requirePermission("booking.new", "create");
   if (!guard.ok) return { success: false, error: guard.error };
@@ -353,6 +356,10 @@ export async function createBookingsAction(
   }
   if (input.status !== "confirmed") {
     return { success: false, error: "Status booking tidak valid." };
+  }
+  const method = input.paymentMethod as PayMethod;
+  if (!["Cash", "QRIS", "Transfer"].includes(method)) {
+    return { success: false, error: "Metode pembayaran tidak valid." };
   }
 
   const parsedDetails = input.details.map((detail) => ({
@@ -477,24 +484,24 @@ export async function createBookingsAction(
             courtDiscountPct: number;
           } | null = null;
           let joinFee = 0;
-          let shouldStartNewQuotaCycle = false;
           if (member?.plan && member.plan.isDeleted === 0) {
             const quotaCycle = resolveMembershipQuotaCycle({
               quotaUsed: member.quotaUsed,
               cycleStart: member.cycleStart,
               resetPeriodDays: member.plan.resetPeriodDays,
             });
-            shouldStartNewQuotaCycle = quotaCycle.shouldStartNewCycle;
-            plan = {
-              includedCourtBookings: member.plan.includedCourtBookings,
-              courtDiscountPct: member.plan.courtDiscountPct,
-            };
-            quotaRemaining = Math.max(
-              0,
-              member.plan.includedCourtBookings -
-                quotaCycle.effectiveQuotaUsed,
-            );
-            joinFee = member.joinFeePaid ? 0 : member.plan.joinFee;
+            if (!quotaCycle.shouldStartNewCycle) {
+              plan = {
+                includedCourtBookings: member.plan.includedCourtBookings,
+                courtDiscountPct: member.plan.courtDiscountPct,
+              };
+              quotaRemaining = Math.max(
+                0,
+                member.plan.includedCourtBookings -
+                  quotaCycle.effectiveQuotaUsed,
+              );
+              joinFee = member.joinFeePaid ? 0 : member.plan.joinFee;
+            }
           }
 
           const benefit = calcMembershipBenefit({
@@ -520,8 +527,8 @@ export async function createBookingsAction(
               status: "confirmed",
               customer: member?.name ?? input.customer.trim(),
               paymentMethod: input.paymentMethod ?? null,
-              totalPrice: benefit.grandTotal,
-              joinFee,
+              totalPrice: benefit.payable,
+              joinFee: 0,
               quotaConsumed: benefit.quotaCoveredCount,
               note:
                 input.note ??
@@ -554,14 +561,34 @@ export async function createBookingsAction(
               where: { id: member.id },
               data: {
                 ...(benefit.quotaCoveredCount > 0 && {
-                  quotaUsed: shouldStartNewQuotaCycle
-                    ? benefit.quotaCoveredCount
-                    : { increment: benefit.quotaCoveredCount },
-                  ...(shouldStartNewQuotaCycle && { cycleStart: new Date() }),
+                  quotaUsed: { increment: benefit.quotaCoveredCount },
                 }),
                 ...(joinFee > 0 && { joinFeePaid: true }),
                 ...auditUpdate(session.userId),
               },
+            });
+          }
+          const payment = validatePaymentInput({
+            actor: "staff",
+            method,
+            total: benefit.grandTotal,
+            cashReceived: opts?.cashReceived,
+          });
+          if (!payment.ok) throw new Error(`PAYMENT_INVALID:${payment.error}`);
+
+          if (benefit.grandTotal > 0) {
+            const pay = await recordPayment(tx, {
+              companyId: session.companyId,
+              method,
+              membershipAmount: joinFee,
+              courtAmount: benefit.payable,
+              paidByType: "staff",
+              cashReceived: opts?.cashReceived,
+              actor: { kind: "staff", userId: session.userId },
+            });
+            await tx.t_booking.update({
+              where: { id: created.id },
+              data: { paymentId: pay.id },
             });
           }
           return created;
@@ -589,6 +616,12 @@ export async function createBookingsAction(
         return {
           success: false,
           error: "Harga booking berubah. Silakan kembali dan pilih ulang waktu.",
+        };
+      }
+      if (message.startsWith("PAYMENT_INVALID:")) {
+        return {
+          success: false,
+          error: message.slice("PAYMENT_INVALID:".length),
         };
       }
       if (message === "COURT_UNAVAILABLE" || message === "COURT_CLOSED") {
@@ -629,7 +662,7 @@ export type BookingMember = {
 export async function getMemberByIdAction(
   id: string,
 ): Promise<BookingMember | null> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return null;
   const db = await getTenantDb(session.dbConfig);
   const m = await db.t_member.findFirst({
@@ -691,9 +724,9 @@ export type BookingRecord = {
 
 /** List booking detail lines (one per court session) joined with header info. */
 export async function getBookingsAction(): Promise<BookingRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.t_booking_detail.findMany({
     where: { companyId: session.companyId, isDeleted: 0 },
     orderBy: { start: "asc" },
@@ -749,8 +782,22 @@ export async function cancelBookingAction(
       });
       if (cancelled.count !== 1) throw new Error("ALREADY_CANCELLED");
 
-      const wasQuotaCovered = detail.rateNote === "free (quota)";
-      if (wasQuotaCovered && detail.booking.memberId) {
+      const member = detail.booking.memberId
+        ? await tx.t_member.findFirst({
+            where: {
+              id: detail.booking.memberId,
+              companyId: session.companyId,
+              ...NOT_DELETED,
+            },
+            select: { cycleStart: true },
+          })
+        : null;
+      const restoreQuota = canRestoreQuotaForCancellation({
+        wasQuotaCovered: detail.rateNote === "free (quota)",
+        bookingCreatedAt: detail.booking.createdAt,
+        currentCycleStart: member?.cycleStart ?? null,
+      });
+      if (restoreQuota && detail.booking.memberId) {
         await tx.t_member.updateMany({
           where: {
             id: detail.booking.memberId,
@@ -774,6 +821,17 @@ export async function cancelBookingAction(
             quotaConsumed: { decrement: 1 },
             ...auditUpdate(session.userId),
           },
+        });
+      }
+      if (detail.price > 0 && detail.booking.paymentId) {
+        await recordBookingRefund(tx, {
+          companyId: session.companyId,
+          bookingDetailId: detail.id,
+          paymentId: detail.booking.paymentId,
+          amount: detail.price,
+          method: detail.booking.paymentMethod as PayMethod,
+          actorUserId: session.userId,
+          reason: "Cancelled by staff",
         });
       }
 
@@ -818,7 +876,7 @@ export async function deleteBookingAction(
   const guard = await requirePermission("booking.list", "delete");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   await db.t_booking_detail.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: auditSoftDelete(session.userId),

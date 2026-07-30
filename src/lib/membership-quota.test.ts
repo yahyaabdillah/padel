@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { calcMembershipBenefit } from "./membership-benefit";
-import { resolveMembershipQuotaCycle } from "./membership-quota";
+import {
+  canRestoreQuotaForCancellation,
+  isMembershipCycleActive,
+  quotaUnitsForDuration,
+  resolveMembershipQuotaCycle,
+} from "./membership-quota";
 
 test("one free quota covers exactly one 60-minute court session", () => {
   const benefit = calcMembershipBenefit({
@@ -48,6 +53,54 @@ test("active membership cycle keeps its current usage", () => {
     shouldStartNewCycle: false,
   });
 });
+
+test("membership benefits expire until the member explicitly joins again", () => {
+  assert.equal(
+    isMembershipCycleActive({
+      cycleStart: "2026-06-01T00:00:00.000Z",
+      resetPeriodDays: 30,
+      now: new Date("2026-07-02T00:00:00.000Z"),
+    }),
+    false,
+  );
+  assert.equal(
+    isMembershipCycleActive({
+      cycleStart: "2026-07-01T00:00:00.000Z",
+      resetPeriodDays: 30,
+      now: new Date("2026-07-15T00:00:00.000Z"),
+    }),
+    true,
+  );
+});
+
+test("cancelling quota booking from an older cycle does not credit current cycle", () => {
+  assert.equal(
+    canRestoreQuotaForCancellation({
+      wasQuotaCovered: true,
+      bookingCreatedAt: new Date("2026-06-20T00:00:00.000Z"),
+      currentCycleStart: new Date("2026-07-01T00:00:00.000Z"),
+    }),
+    false,
+  );
+});
+
+test("cancelling quota booking from current cycle restores its quota", () => {
+  assert.equal(
+    canRestoreQuotaForCancellation({
+      wasQuotaCovered: true,
+      bookingCreatedAt: new Date("2026-07-20T00:00:00.000Z"),
+      currentCycleStart: new Date("2026-07-01T00:00:00.000Z"),
+    }),
+    true,
+  );
+});
+
+test("one quota unit accepts exactly one 60-minute session", () => {
+  assert.equal(quotaUnitsForDuration(60), 1);
+  assert.throws(() => quotaUnitsForDuration(90), /60 minutes/);
+  assert.throws(() => quotaUnitsForDuration(120), /60 minutes/);
+});
+
 
 test("booking persistence consumes quota inside the server transaction", () => {
   const adminBookingAction = readFileSync(

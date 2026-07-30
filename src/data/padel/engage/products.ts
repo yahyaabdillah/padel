@@ -99,19 +99,19 @@ export interface RecentSale {
   receiptNo: string;
   items: number;
   total: number;
-  method: "Cash" | "Card" | "QRIS" | "Wallet";
+  method: "Cash" | "QRIS" | "Transfer";
   cashier: string;
   time: string;
 }
 
 export const recentSales: RecentSale[] = [
   { id: "sal-01", receiptNo: "RCP-20260602-014", items: 3, total: 285_000, method: "QRIS", cashier: "Budi Santoso", time: "14:32" },
-  { id: "sal-02", receiptNo: "RCP-20260602-013", items: 1, total: 4_350_000, method: "Card", cashier: "Budi Santoso", time: "13:05" },
+  { id: "sal-02", receiptNo: "RCP-20260602-013", items: 1, total: 4_350_000, method: "Transfer", cashier: "Budi Santoso", time: "13:05" },
   { id: "sal-03", receiptNo: "RCP-20260602-012", items: 2, total: 120_000, method: "Cash", cashier: "Budi Santoso", time: "12:18" },
-  { id: "sal-04", receiptNo: "RCP-20260602-011", items: 4, total: 410_000, method: "Wallet", cashier: "Budi Santoso", time: "11:47" },
+  { id: "sal-04", receiptNo: "RCP-20260602-011", items: 4, total: 410_000, method: "QRIS", cashier: "Budi Santoso", time: "11:47" },
 ];
 
-export const paymentMethods = ["Cash", "Card", "QRIS", "Wallet"] as const;
+export const paymentMethods = ["Cash", "QRIS", "Transfer"] as const;
 export type PaymentMethod = (typeof paymentMethods)[number];
 
 /** Generate a unique product id (local/dummy only). */

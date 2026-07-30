@@ -5,24 +5,10 @@
 // fall within the club's overall operating window (the widest open range across
 // open weekdays). Guarded by the same menu as operating hours (master.hours).
 
-import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditUpdate, auditSoftDelete, NOT_DELETED } from "@/lib/audit";
-import { requirePermission } from "@/lib/access-guard";
-
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
+import { readSession, requirePermission } from "@/lib/access-guard";
 
 export type TimeGroup = {
   id: string;
@@ -57,7 +43,7 @@ async function operatingBounds(
 }
 
 export async function getTimeGroupsAction(): Promise<TimeGroup[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
   const db = await getTenantDb(session.dbConfig);
   const rows = await db.m_time_group.findMany({

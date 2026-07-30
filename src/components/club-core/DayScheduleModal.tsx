@@ -9,7 +9,7 @@
 // NOTE: day-off ("Libur") is intentionally NOT here — it moves to the
 // Maintenance module.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { ModalDialog } from "@/components/ui/modal";
 import Button from "@/components/ui/button/Button";
@@ -119,25 +119,6 @@ const DayScheduleModal: React.FC<DayScheduleModalProps> = ({
     setError("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule, isOpen, openStart, openEnd]);
-
-  // time options within operating window, stepped by slotMinutes
-  const stepMin = slotMinutes;
-  const startOptions = useMemo(() => {
-    const opts: { value: string; label: string }[] = [];
-    for (let m = openStart * 60; m < openEnd * 60; m += stepMin) {
-      const label = `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
-      opts.push({ value: label, label });
-    }
-    return opts;
-  }, [openStart, openEnd, stepMin]);
-  const endOptions = useMemo(() => {
-    const opts: { value: string; label: string }[] = [];
-    for (let m = openStart * 60 + stepMin; m <= openEnd * 60; m += stepMin) {
-      const label = `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
-      opts.push({ value: label, label });
-    }
-    return opts;
-  }, [openStart, openEnd, stepMin]);
 
   if (!schedule) return null;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import PageBreadCrumb from "@/components/common/PageBreadCrumb";
 import Button from "@/components/ui/button/Button";
 import Badge from "@/components/ui/badge/Badge";
@@ -12,13 +12,12 @@ import StatCard from "@/components/member/StatCard";
 import { ReceiptIcon, WalletIcon } from "@/components/member/icons";
 import { useRole } from "@/context/RoleContext";
 import {
-  memberPayments,
   paymentStatusMeta,
-  paymentSummary,
   idr,
   prettyDate,
   type PaymentRecord,
 } from "@/data/padel/member";
+import { getMyPaymentsAction } from "./actions";
 
 const categories = ["All", "Booking", "Open Play", "Membership", "Pro Shop", "Top-up", "Coaching"];
 
@@ -27,11 +26,34 @@ export default function MemberPaymentsPage() {
   const { currentUser } = useRole();
   const [filter, setFilter] = useState("All");
   const [receipt, setReceipt] = useState<PaymentRecord | null>(null);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+
+  useEffect(() => {
+    void getMyPaymentsAction().then(setPayments);
+  }, []);
 
   const rows = useMemo(
-    () => (filter === "All" ? memberPayments : memberPayments.filter((p) => p.category === filter)),
-    [filter],
+    () => (filter === "All" ? payments : payments.filter((p) => p.category === filter)),
+    [filter, payments],
   );
+  const paymentSummary = useMemo(() => {
+    const now = new Date();
+    const month = now.toISOString().slice(0, 7);
+    const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      .toISOString()
+      .slice(0, 7);
+    const paid = payments.filter((payment) => payment.status === "paid");
+    return {
+      spentThisMonth: paid
+        .filter((payment) => payment.date.startsWith(month))
+        .reduce((sum, payment) => sum + payment.amount, 0),
+      spentLastMonth: paid
+        .filter((payment) => payment.date.startsWith(previous))
+        .reduce((sum, payment) => sum + payment.amount, 0),
+      totalLifetime: paid.reduce((sum, payment) => sum + payment.amount, 0),
+      receiptsCount: payments.length,
+    };
+  }, [payments]);
 
   const columns: Column<PaymentRecord>[] = [
     {
@@ -98,7 +120,9 @@ export default function MemberPaymentsPage() {
           icon={<WalletIcon />}
           accent="primary"
           trend={{
-            value: `${Math.round(((paymentSummary.spentThisMonth - paymentSummary.spentLastMonth) / paymentSummary.spentLastMonth) * 100)}%`,
+            value: paymentSummary.spentLastMonth
+              ? `${Math.round(((paymentSummary.spentThisMonth - paymentSummary.spentLastMonth) / paymentSummary.spentLastMonth) * 100)}%`
+              : "0%",
             up: paymentSummary.spentThisMonth > paymentSummary.spentLastMonth,
           }}
           hint="vs last month"

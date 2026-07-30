@@ -1,24 +1,11 @@
 "use server";
 
-import { cookies } from "next/headers";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
 import { auditCreate, auditSoftDelete, auditUpdate, NOT_DELETED } from "@/lib/audit";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/tenant-client";
-
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
+import { validatePlanNumbers } from "@/lib/plan-validation";
 
 export type PlanRecord = {
   id: string;
@@ -69,9 +56,9 @@ function toRecord(p: {
 
 /** List membership plans for the tenant (by sort order). */
 export async function getPlansAction(): Promise<PlanRecord[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   const rows = await db.m_membership_plan.findMany({
     where: { companyId: session.companyId, ...NOT_DELETED },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -86,7 +73,9 @@ export async function createPlanAction(
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
   if (!input.name.trim()) return { success: false, error: "Nama plan wajib diisi." };
-  const db = await getTenantDb();
+  const validation = validatePlanNumbers(input);
+  if (!validation.ok) return { success: false, error: validation.error };
+  const db = await getTenantDb(session.dbConfig);
   const created = await db.m_membership_plan.create({
     data: {
       companyId: session.companyId,
@@ -115,7 +104,21 @@ export async function updatePlanAction(
   const guard = await requirePermission("master.plans", "update");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
+  const current = await db.m_membership_plan.findFirst({
+    where: { id, companyId: session.companyId, ...NOT_DELETED },
+  });
+  if (!current) return { success: false, error: "Plan tidak ditemukan." };
+  const validation = validatePlanNumbers({
+    joinFee: patch.joinFee ?? current.joinFee,
+    includedCourtBookings:
+      patch.includedCourtBookings ?? current.includedCourtBookings,
+    resetPeriodDays: patch.resetPeriodDays ?? current.resetPeriodDays,
+    freeCoaching: patch.freeCoaching ?? current.freeCoaching,
+    courtDiscountPct: patch.courtDiscountPct ?? current.courtDiscountPct,
+    sortOrder: patch.sortOrder ?? current.sortOrder,
+  });
+  if (!validation.ok) return { success: false, error: validation.error };
   await db.m_membership_plan.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: {
@@ -143,7 +146,7 @@ export async function deletePlanAction(id: string): Promise<{ success: boolean; 
   const guard = await requirePermission("master.plans", "delete");
   if (!guard.ok) return { success: false, error: guard.error };
   const session = guard.session;
-  const db = await getTenantDb();
+  const db = await getTenantDb(session.dbConfig);
   await db.m_membership_plan.updateMany({
     where: { id, companyId: session.companyId, ...NOT_DELETED },
     data: auditSoftDelete(session.userId),

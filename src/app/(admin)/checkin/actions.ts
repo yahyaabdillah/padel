@@ -4,12 +4,9 @@
 // through the shared checkin-core helper. RBAC enforced via requirePermission
 // ("checkin", ...). Reads require a valid session.
 
-import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { getTenantDb } from "@/lib/tenant-db";
-import { SESSION_COOKIE_NAME } from "@/lib/env";
-import type { AuthSession } from "@/lib/auth-types";
-import { requirePermission } from "@/lib/access-guard";
+import { readSession, requirePermission } from "@/lib/access-guard";
 import { NOT_DELETED } from "@/lib/audit";
 import {
   DEFAULT_CHECKIN_SETTINGS,
@@ -21,17 +18,6 @@ import {
   verifyBookingToken,
   staffQrText,
 } from "@/lib/checkin-core";
-
-async function requireSession(): Promise<AuthSession | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    return null;
-  }
-}
 
 export type CheckinLogRow = {
   id: string;
@@ -140,7 +126,7 @@ export async function getCheckinPageDataAction(): Promise<CheckinPageData | null
 
 /** Search active members for the manual check-in box. */
 export async function searchMembersAction(q: string): Promise<MemberOption[]> {
-  const session = await requireSession();
+  const session = await readSession();
   if (!session) return [];
   const db = await getTenantDb(session.dbConfig);
   const term = q.trim();

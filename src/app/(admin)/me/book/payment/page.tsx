@@ -24,13 +24,13 @@ import {
   getMeOccupancyAction,
   previewMyBookingAction,
   createMyBookingAction,
+  startMyBookingMidtransAction,
 } from "../actions";
 import {
   SESSION_MINUTES,
   SESSION_SLOTS,
   toKey,
   slotLabel,
-  prettyDate,
   idr,
   sessionAt,
 } from "../book-helpers";
@@ -52,6 +52,49 @@ interface CartItem {
 
 let cartSeq = 0;
 const nextCartId = () => `c-${Date.now().toString(36)}-${cartSeq++}`;
+
+type SnapCallbacks = {
+  onSuccess: () => void;
+  onPending: () => void;
+  onError: () => void;
+  onClose: () => void;
+};
+
+declare global {
+  interface Window {
+    snap?: { pay: (token: string, callbacks: SnapCallbacks) => void };
+  }
+}
+
+async function loadMidtransSnap(
+  clientKey: string,
+  production: boolean,
+): Promise<void> {
+  const source = `${production ? "https://app.midtrans.com" : "https://app.sandbox.midtrans.com"}/snap/snap.js`;
+  const existing = document.querySelector<HTMLScriptElement>(
+    "script[data-padel-midtrans]",
+  );
+  if (
+    existing &&
+    existing.src === source &&
+    existing.dataset.clientKey === clientKey &&
+    window.snap
+  ) {
+    return;
+  }
+  existing?.remove();
+  await new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = source;
+    script.async = true;
+    script.dataset.padelMidtrans = "true";
+    script.dataset.clientKey = clientKey;
+    script.setAttribute("data-client-key", clientKey);
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Midtrans Snap gagal dimuat."));
+    document.head.appendChild(script);
+  });
+}
 
 function PaymentInner() {
   const router = useRouter();
@@ -140,14 +183,64 @@ function PaymentInner() {
         partySize: court?.format === "single" ? 2 : 4,
       };
     });
-    const res = await createMyBookingAction({ sessions, paymentMethod: method });
-    setSaving(false);
-    if (!res.success) {
-      toast.error(res.error || "Gagal booking.");
+    const finish = async (providerOrderId?: string) => {
+      const res = await createMyBookingAction({
+        sessions,
+        paymentMethod: method,
+        providerOrderId,
+      });
+      setSaving(false);
+      if (!res.success) {
+        toast.error(res.error || "Gagal booking.");
+        return;
+      }
+      toast.success(
+        `Pembayaran ${idr(res.payable ?? 0)} diterima.`,
+        `${cart.length} booking dikonfirmasi`,
+      );
+    setConfirmedRef(res.paymentRef ?? res.id ?? "—");
+    };
+
+    if (preview?.payable === 0) {
+      await finish();
       return;
     }
-    toast.success(`Pembayaran ${idr(res.payable ?? 0)} diterima.`, `${cart.length} booking dikonfirmasi`);
-    setConfirmedRef(res.paymentRef ?? res.id ?? "—");
+
+    const started = await startMyBookingMidtransAction({
+      sessions,
+      paymentMethod: method,
+    });
+    if (
+      !started.success ||
+      !started.token ||
+      !started.orderId ||
+      !started.clientKey
+    ) {
+      setSaving(false);
+      toast.error(started.error || "Gagal memulai pembayaran Midtrans.");
+      return;
+    }
+    try {
+      await loadMidtransSnap(started.clientKey, Boolean(started.production));
+      if (!window.snap) throw new Error("Midtrans Snap tidak tersedia.");
+      window.snap.pay(started.token, {
+        onSuccess: () => void finish(started.orderId),
+        onPending: () => {
+          setSaving(false);
+          toast.info("Pembayaran masih menunggu penyelesaian.", "Midtrans pending");
+        },
+        onError: () => {
+          setSaving(false);
+          toast.error("Pembayaran Midtrans gagal.");
+        },
+        onClose: () => setSaving(false),
+      });
+    } catch (err) {
+      setSaving(false);
+      toast.error(
+        err instanceof Error ? err.message : "Midtrans Snap gagal dimuat.",
+      );
+    }
   };
 
   if (loading || !data) {
@@ -276,7 +369,7 @@ function PaymentInner() {
         <Card padding="lg">
           <h3 className="mb-1 text-lg font-semibold text-[var(--text-heading)]">Pembayaran</h3>
           <p className="mb-5 text-sm text-[var(--text-caption)]">
-            Pilih metode pembayaran. Pembayaran tunai hanya tersedia di front desk (lewat staff).
+            Pilih kanal pembayaran. Pembayaran diproses dan diverifikasi melalui Midtrans Snap.
           </p>
 
           <p className="mb-2 text-sm font-medium text-[var(--text-body)]">Metode pembayaran</p>
